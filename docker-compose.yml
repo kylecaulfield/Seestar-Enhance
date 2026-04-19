@@ -1,0 +1,29 @@
+services:
+  backend:
+    build: ./backend
+    container_name: seestar-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./samples:/app/samples
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    container_name: seestar-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+    depends_on:
+      - backend
