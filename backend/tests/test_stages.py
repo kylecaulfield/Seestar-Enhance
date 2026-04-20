@@ -9,10 +9,11 @@ import pytest
 
 from app.stages import (
     background,
+    bm3d_denoise,
     color,
     curves,
-    denoise,
     export,
+    ml_denoise,
     sharpen,
     stars,
     stretch,
@@ -78,16 +79,32 @@ def test_curves_shape_range(sample_rgb: np.ndarray) -> None:
     _assert_rgb01(out, sample_rgb.shape)
 
 
-def test_stars_passthrough(sample_rgb: np.ndarray) -> None:
-    out = stars.process(sample_rgb)
+def test_bm3d_denoise_shape_range(sample_rgb: np.ndarray) -> None:
+    out = bm3d_denoise.process(sample_rgb, sigma=0.02)
     _assert_rgb01(out, sample_rgb.shape)
-    assert np.array_equal(out, sample_rgb)
 
 
-def test_denoise_passthrough(sample_rgb: np.ndarray) -> None:
-    out = denoise.process(sample_rgb)
-    _assert_rgb01(out, sample_rgb.shape)
-    assert np.array_equal(out, sample_rgb)
+def test_bm3d_denoise_reduces_noise(sample_rgb: np.ndarray) -> None:
+    rng = np.random.default_rng(3)
+    noisy = np.clip(
+        sample_rgb + rng.normal(0.0, 0.04, size=sample_rgb.shape).astype(np.float32),
+        0.0,
+        1.0,
+    )
+    denoised = bm3d_denoise.process(noisy, sigma=0.04)
+    noisy_res = float((noisy - sample_rgb).std())
+    denoised_res = float((denoised - sample_rgb).std())
+    assert denoised_res < noisy_res
+
+
+def test_stars_stub_raises(sample_rgb: np.ndarray) -> None:
+    with pytest.raises(NotImplementedError):
+        stars.process(sample_rgb)
+
+
+def test_ml_denoise_stub_raises(sample_rgb: np.ndarray) -> None:
+    with pytest.raises(NotImplementedError):
+        ml_denoise.process(sample_rgb)
 
 
 def test_export_writes_16bit_png(sample_rgb: np.ndarray, tmp_path: Path) -> None:
