@@ -111,11 +111,16 @@ NEBULA: Profile = {
 # radius favors dust-lane detail over halo softness.
 GALAXY: Profile = {
     **DEFAULT,
+    # Finer grid than default: M81-class targets have broadband color
+    # gradients (LP residuals, amp glow) at scales of a few hundred
+    # pixels. A 16-cell grid fits and subtracts those; 28 left them as
+    # blue/red blotches in the background. Grid must still be coarser
+    # than the galaxy itself so the fit doesn't eat halo signal.
     "background": {
-        "grid": 28,
+        "grid": 16,
         "sigma": 2.5,
         "iters": 5,
-        "smoothing": 1.0,
+        "smoothing": 1.2,
         "downscale": 8,
     },
     "stretch": {
