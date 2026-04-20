@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env
+node_modules/
+dist/
+.vite/
+.DS_Store
+samples/*.fit
+samples/*.fits
+samples/*.fts
+samples/outputs/
+!samples/.gitkeep
