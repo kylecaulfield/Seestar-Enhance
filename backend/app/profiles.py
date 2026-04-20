@@ -74,15 +74,16 @@ NEBULA: Profile = {
         "smoothing": 1.5,
         "downscale": 8,
     },
-    # Strong SCNR: the Seestar RGGB sensor double-samples green, and
-    # emission nebulae plus stretch push that into a severe green cast
-    # that WB alone can't fix. 0.9 is nearly a hard clip.
+    # SCNR the Seestar's RGGB green cast, but only partially: 0.7 is a
+    # soft blend so OIII's green-cyan component survives. A hard clip
+    # (0.9) over-suppresses OIII and turns the Veil purple instead of
+    # the red-Ha + blue-teal-OIII combo that community images show.
     "color": {
         "dark_percentile": 25.0,
         "mid_low": 40.0,
         "mid_high": 80.0,
         "wb_strength": 1.0,
-        "green_clip": 0.9,
+        "green_clip": 0.7,
     },
     # Aggressive black point clips the mid-dark chroma speckle to pure
     # black; filaments survive above it. stretch is moderate because
@@ -122,9 +123,10 @@ GALAXY: Profile = {
         "stretch": 22.0,
     },
     # Galaxy sky noise after stretch is meaningful; boost denoise so the
-    # halo doesn't drown in chroma speckle. Modest chroma blur for the
-    # faint halo region.
-    "bm3d_denoise": {"sigma": None, "strength": 1.8, "chroma_blur": 2.5},
+    # halo doesn't drown in chroma speckle. Heavy chroma_blur is safe
+    # here because galaxy detail (dust lanes, spiral arms) lives in luma,
+    # not chroma — the background Bayer demosaic speckle is pure chroma.
+    "bm3d_denoise": {"sigma": None, "strength": 1.8, "chroma_blur": 7.0},
     "sharpen": {"radius": 1.3, "amount": 0.30},
     "curves": {"contrast": 0.55, "saturation": 1.20},
 }
