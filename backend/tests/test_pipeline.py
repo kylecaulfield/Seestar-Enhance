@@ -36,3 +36,22 @@ def test_pipeline_end_to_end(synthetic_fits: Path, tmp_path: Path) -> None:
     _, _, _, info = reader.read()
     assert info["bitdepth"] == 16
     assert info["planes"] == 3
+
+
+def test_pipeline_progress_callback(synthetic_fits: Path, tmp_path: Path) -> None:
+    events: list[tuple[str, float]] = []
+    run(
+        synthetic_fits,
+        tmp_path / "out.png",
+        progress=lambda stage, frac: events.append((stage, frac)),
+    )
+
+    stages_seen = [s for s, _ in events]
+    for expected in (
+        "load", "classify", "background", "color", "stretch",
+        "bm3d_denoise", "sharpen", "curves", "export", "done",
+    ):
+        assert expected in stages_seen, f"missing progress for {expected}"
+
+    for _, frac in events:
+        assert 0.0 <= frac <= 1.0

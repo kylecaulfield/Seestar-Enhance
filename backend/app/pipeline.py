@@ -1,10 +1,22 @@
 """End-to-end v1 pipeline.
 
-Order (classical only, no ML): io_fits -> background -> color -> stretch ->
-bm3d_denoise -> sharpen -> curves -> export.
+Order (classical only, no ML):
+    io_fits -> classify -> background -> color -> stretch ->
+    bm3d_denoise -> sharpen -> curves -> export.
+
+Classification runs on the debayered-but-unprocessed image so its metrics
+stay comparable across frames. The result selects one of the built-in
+profiles (nebula / galaxy / cluster) unless the caller overrides it.
 
 Run as a module:
-    python -m app.pipeline <input.fits> <output.png> [--profile NAME] [-v]
+    python -m app.pipeline <input.fits> <output.png>
+                           [--profile NAME] [--no-auto] [-v]
+
+Progress callback:
+    run(..., progress=lambda stage, frac: ...)
+  Each stage reports its name and a 0..1 completion value; the pipeline
+  emits an additional frac=1.0 tick when the whole run finishes. This is
+  the interface we'll wire to the web UI in phase 5.
 
 v2 will insert star removal (after stretch) and replace bm3d_denoise with
 an ML denoiser. See stages/stars.py and stages/ml_denoise.py for stubs.
@@ -12,9 +24,10 @@ an ML denoiser. See stages/stars.py and stages/ml_denoise.py for stubs.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
-from typing import Union
+from typing import Callable, Optional, Union
 
 import numpy as np
 
@@ -22,6 +35,7 @@ from app import profiles
 from app.stages import (
     background,
     bm3d_denoise,
+    classify,
     color,
     curves,
     export,
@@ -31,45 +45,110 @@ from app.stages import (
 from app.stages.io_fits import load_fits
 
 PathLike = Union[str, Path]
+ProgressCallback = Callable[[str, float], None]
+
+logger = logging.getLogger(__name__)
+
+
+# Stages in execution order. Progress is reported as stage-starting
+# (frac=0.0) and stage-finished (frac=1.0); intermediate fractions are
+# reserved for long-running stages that learn to emit their own updates.
+_STAGES = ("load", "classify", "background", "color", "stretch",
+           "bm3d_denoise", "sharpen", "curves", "export")
+
+
+def _noop_progress(stage: str, frac: float) -> None:  # noqa: ARG001
+    return None
 
 
 def run(
     input_fits: PathLike,
     output_png: PathLike,
-    profile: str = "default",
+    profile: Optional[str] = None,
     verbose: bool = False,
+    progress: Optional[ProgressCallback] = None,
 ) -> np.ndarray:
-    params = profiles.get(profile)
+    """Run the full v1 pipeline.
+
+    Parameters
+    ----------
+    input_fits : str | Path
+        Input Seestar FITS file.
+    output_png : str | Path
+        Output 16-bit PNG file.
+    profile : str | None
+        Named profile from `app.profiles`. If None, the image is classified
+        and the matching profile ("nebula" | "galaxy" | "cluster") is used.
+    verbose : bool
+        Mirror stage messages to stderr in addition to the logger.
+    progress : Callable[[str, float], None] | None
+        Optional callback invoked as (stage_name, fraction_complete). Called
+        once with frac=0.0 at the start of each stage and once with frac=1.0
+        at its end, plus a final ("done", 1.0).
+    """
+    cb: ProgressCallback = progress or _noop_progress
 
     def log(msg: str) -> None:
+        logger.info(msg)
         if verbose:
             print(msg, file=sys.stderr, flush=True)
 
-    log(f"[1/7] loading {input_fits}")
+    log(f"[1/{len(_STAGES)}] loading {input_fits}")
+    cb("load", 0.0)
     img = load_fits(input_fits)
+    cb("load", 1.0)
 
-    log("[2/7] background removal")
+    log(f"[2/{len(_STAGES)}] classify")
+    cb("classify", 0.0)
+    if profile is None:
+        selected = classify.classify(img)
+        log(f"auto-selected profile: {selected}")
+    else:
+        selected = profile
+        log(f"using requested profile: {selected}")
+    params = profiles.get(selected)
+    cb("classify", 1.0)
+
+    log(f"[3/{len(_STAGES)}] background removal")
+    cb("background", 0.0)
     img = background.process(img, **params.get("background", {}))
+    cb("background", 1.0)
 
-    log("[3/7] color neutralization + white balance")
+    log(f"[4/{len(_STAGES)}] color neutralization + white balance")
+    cb("color", 0.0)
     img = color.process(img, **params.get("color", {}))
+    cb("color", 1.0)
 
-    log("[4/7] stretch")
+    log(f"[5/{len(_STAGES)}] stretch")
+    cb("stretch", 0.0)
     img = stretch.process(img, **params.get("stretch", {}))
+    cb("stretch", 1.0)
 
     # TODO(v2): insert stars.process(img) here to split stars/starless, then
     # run denoise on starless only and recombine with screen blend before
     # sharpen. See backend/app/stages/stars.py and ml_denoise.py stubs.
 
-    log("[5/7] bm3d denoise (classical)")
+    log(f"[6/{len(_STAGES)}] bm3d denoise (classical)")
+    cb("bm3d_denoise", 0.0)
     img = bm3d_denoise.process(img, **params.get("bm3d_denoise", {}))
+    cb("bm3d_denoise", 1.0)
 
-    log("[6/7] sharpen")
+    log(f"[7/{len(_STAGES)}] sharpen")
+    cb("sharpen", 0.0)
     img = sharpen.process(img, **params.get("sharpen", {}))
+    cb("sharpen", 1.0)
 
-    log("[7/7] curves + export")
+    log(f"[8/{len(_STAGES)}] curves")
+    cb("curves", 0.0)
     img = curves.process(img, **params.get("curves", {}))
+    cb("curves", 1.0)
+
+    log(f"[9/{len(_STAGES)}] export -> {output_png}")
+    cb("export", 0.0)
     export.process(img, output_png)
+    cb("export", 1.0)
+
+    cb("done", 1.0)
     log(f"wrote {output_png}")
     return img
 
@@ -83,14 +162,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("output", help="output PNG file (16-bit)")
     parser.add_argument(
         "--profile",
-        default="default",
+        default=None,
         choices=sorted(profiles.PROFILES),
-        help="parameter profile",
+        help="parameter profile (default: auto-classify)",
+    )
+    parser.add_argument(
+        "--no-auto",
+        action="store_true",
+        help="disable auto-classify; use --profile or fall back to default",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
-    run(args.input, args.output, profile=args.profile, verbose=args.verbose)
+    logging.basicConfig(
+        level=logging.INFO if args.verbose else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    selected = args.profile
+    if selected is None and args.no_auto:
+        selected = "default"
+
+    run(args.input, args.output, profile=selected, verbose=args.verbose)
     return 0
 
 
