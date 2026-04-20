@@ -36,9 +36,23 @@ one or more Seestar FITS files into `samples/` to enable them.
 
 ## Implemented
 
-- `GET /health` — liveness probe
-- `backend/app/stages/io_fits.py`
-  - `load_fits(path) -> np.ndarray` — reads a Seestar FITS file, detects the
-    Bayer pattern from the header (`BAYERPAT`, default `RGGB`), debayers with
-    Malvar-2004, returns float32 RGB normalized to `[0, 1]`.
-  - `save_preview_png(arr, path)` — log-stretched 8-bit PNG for debugging.
+- `GET /health` — liveness probe.
+- `backend/app/stages/io_fits.py` — `load_fits`, `save_preview_png`.
+- Non-ML pipeline stages in `backend/app/stages/`:
+  - `background.py` — RBF thin-plate-spline background fit with
+    sigma-clipping, applied per channel.
+  - `color.py` — dark-pixel neutralization + mid-tone white balance.
+  - `stretch.py` — arcsinh stretch with auto black-point (0.1st percentile).
+  - `sharpen.py` — gentle unsharp mask.
+  - `curves.py` — mild S-curve contrast + saturation boost.
+  - `export.py` — 16-bit RGB PNG (via pypng).
+  - `stars.py`, `denoise.py` — pass-through placeholders for ML stages.
+- `backend/app/pipeline.py` — chains `io_fits → background → color → stars →
+  denoise → stretch → sharpen → curves → export` and exposes a CLI.
+
+## CLI
+
+```sh
+cd backend
+python -m app.pipeline ../samples/nebula.fits ../samples/outputs/nebula.png -v
+```

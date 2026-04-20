@@ -11,4 +11,5 @@ dist/
 samples/*.fit
 samples/*.fits
 samples/*.fts
+samples/outputs/
 !samples/.gitkeep
