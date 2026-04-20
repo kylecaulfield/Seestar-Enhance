@@ -40,6 +40,7 @@ DEFAULT: Profile = {
         "mid_low": 40.0,
         "mid_high": 80.0,
         "wb_strength": 1.0,
+        "green_clip": 0.5,
     },
     "stretch": {
         "black_percentile": 0.1,
@@ -73,20 +74,34 @@ NEBULA: Profile = {
         "smoothing": 1.5,
         "downscale": 8,
     },
-    "stretch": {
-        "black_percentile": 0.05,
-        "stretch": 18.0,
+    # Strong SCNR: the Seestar RGGB sensor double-samples green, and
+    # emission nebulae plus stretch push that into a severe green cast
+    # that WB alone can't fix. 0.9 is nearly a hard clip.
+    "color": {
+        "dark_percentile": 25.0,
+        "mid_low": 40.0,
+        "mid_high": 80.0,
+        "wb_strength": 1.0,
+        "green_clip": 0.9,
     },
-    # Nebula noise is severe after any stretch; a fixed high sigma is
-    # more reliable than the MAD estimator because diffuse emission bleeds
-    # into the estimator's "noise". The chroma_blur is heavy because the
-    # Seestar Bayer demosaic leaves large low-frequency R/G/B blotches
-    # in low-SNR diffuse regions that BM3D alone doesn't handle. Sharpen
-    # stays gentle because we don't have star-removal and we don't want
-    # to re-amplify what we just denoised.
+    # Aggressive black point clips the mid-dark chroma speckle to pure
+    # black; filaments survive above it. stretch is moderate because
+    # once the floor is clipped we don't need to compress as much.
+    "stretch": {
+        "black_percentile": 2.0,
+        "stretch": 22.0,
+    },
+    # Heavy chroma_blur flattens remaining red/blue speckle in the
+    # mid-brightness diffuse region. BM3D sigma is fixed because the
+    # MAD estimator bleeds real nebula structure into its "noise".
+    # Sharpen stays gentle — we don't have star-removal and we don't
+    # want to re-amplify what we just denoised.
     "bm3d_denoise": {"sigma": 0.15, "strength": 1.0, "chroma_blur": 10.0},
     "sharpen": {"radius": 1.6, "amount": 0.25},
-    "curves": {"contrast": 0.45, "saturation": 1.25},
+    # Strong S-curve further pushes residual background toward black;
+    # saturation is tempered because SCNR already biases toward red/blue
+    # and more saturation would posterize the low-SNR diffuse regions.
+    "curves": {"contrast": 0.6, "saturation": 1.15},
 }
 
 

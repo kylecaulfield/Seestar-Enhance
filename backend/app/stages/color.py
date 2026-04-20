@@ -1,8 +1,14 @@
-"""Background neutralization + simple white balance.
+"""Background neutralization + simple white balance + optional SCNR.
 
 1. Neutralization: subtract per-channel median of dark pixels so the sky is
    grey rather than tinted.
 2. White balance: scale channels so their mid-brightness medians match.
+3. Optional SCNR (Subtractive Chromatic Noise Reduction) "average neutral":
+   clip the green channel so it never exceeds the average of red and blue.
+   Standard astrophotography fix for the inherent green bias of RGGB
+   Bayer sensors — the Seestar in particular leaves a strong green cast
+   in diffuse regions that WB alone can't remove once the nebulosity
+   itself is channel-biased.
 """
 from __future__ import annotations
 
@@ -23,6 +29,7 @@ def process(
     mid_low: float = 40.0,
     mid_high: float = 80.0,
     wb_strength: float = 1.0,
+    green_clip: float = 0.0,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")
@@ -51,13 +58,23 @@ def process(
         dtype=np.float32,
     )
     target = float(medians.mean())
-    if target <= 0:
-        return np.clip(img, 0.0, 1.0).astype(np.float32)
+    if target > 0:
+        gains = np.where(medians > 1e-6, target / medians, 1.0).astype(np.float32)
+        gains = 1.0 + wb_strength * (gains - 1.0)
+        for c in range(3):
+            img[..., c] *= gains[c]
 
-    gains = np.where(medians > 1e-6, target / medians, 1.0).astype(np.float32)
-    gains = 1.0 + wb_strength * (gains - 1.0)
-
-    for c in range(3):
-        img[..., c] *= gains[c]
+    if green_clip > 0.0:
+        # SCNR average neutral: pull G down toward (R+B)/2 when it
+        # exceeds that threshold. amount=1.0 is a hard clip; anything less
+        # is a soft blend so real green signal (rare in deep-sky targets,
+        # but real stars with green-ish tints exist) isn't fully erased.
+        amount = float(np.clip(green_clip, 0.0, 1.0))
+        r = img[..., 0]
+        g = img[..., 1]
+        b = img[..., 2]
+        threshold = 0.5 * (r + b)
+        clipped = np.minimum(g, threshold)
+        img[..., 1] = g * (1.0 - amount) + clipped * amount
 
     return np.clip(img, 0.0, 1.0).astype(np.float32)
