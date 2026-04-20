@@ -16,6 +16,7 @@ Licensed under the [MIT License](LICENSE).
 - [Quickstart](#quickstart)
   - [Docker Compose](#docker-compose)
   - [Native (backend only)](#native-backend-only)
+- [Hosting](#hosting)
 - [Pipeline](#pipeline)
   - [Stage reference](#stage-reference)
   - [Profiles](#profiles)
@@ -92,6 +93,17 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
+
+## Hosting
+
+For self-hosting on a VPS, home server, or **Unraid**, see
+[HOSTING.md](HOSTING.md). It covers:
+
+- Generic Docker hosting on any Linux box (prod-mode compose override,
+  Caddy/Nginx reverse proxy, firewall, backups, updates).
+- A step-by-step Unraid tutorial using Compose Manager, including
+  appdata layout, user-share mounting, NGINX Proxy Manager, and a
+  User Script for automatic git-pull updates.
 
 ## Pipeline
 
