@@ -1,22 +1,245 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ReactCompareSlider, ReactCompareSliderImage } from "react-compare-slider";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+// Same-origin in prod (FastAPI serves the SPA); vite proxy in dev.
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+type View = "drop" | "processing" | "done" | "error";
+
+type Status = {
+  job_id: string;
+  status: "queued" | "running" | "done" | "error";
+  stage: string;
+  progress: number;
+  classification: string | null;
+  error: string | null;
+};
+
+const STAGE_LABELS: Record<string, string> = {
+  queued: "Queued",
+  load: "Loading FITS",
+  classify: "Classifying image",
+  background: "Removing sky gradient",
+  color: "Balancing color",
+  stretch: "Stretching",
+  bm3d_denoise: "Denoising",
+  sharpen: "Sharpening",
+  curves: "Applying curves",
+  export: "Writing PNG",
+  done: "Done",
+};
+
+function stageLabel(stage: string): string {
+  return STAGE_LABELS[stage] ?? stage;
+}
 
 export default function App() {
-  const [health, setHealth] = useState<string>("checking…");
+  const [view, setView] = useState<View>("drop");
+  const [status, setStatus] = useState<Status | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [dragActive, setDragActive] = useState(false);
+  const [resultUrl, setResultUrl] = useState<string>("");
+  const [beforeUrl, setBeforeUrl] = useState<string>("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    fetch(`${API_BASE}/health`)
-      .then((r) => r.json())
-      .then((j) => setHealth(j.status ?? "unknown"))
-      .catch(() => setHealth("unreachable"));
+  const reset = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    setStatus(null);
+    setErrorMsg("");
+    setResultUrl("");
+    setBeforeUrl("");
+    setView("drop");
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, []);
+
+  const uploadFile = useCallback(async (file: File) => {
+    setView("processing");
+    setStatus({
+      job_id: "",
+      status: "queued",
+      stage: "queued",
+      progress: 0,
+      classification: null,
+      error: null,
+    });
+
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const resp = await fetch(`${API_BASE}/process`, {
+        method: "POST",
+        body: form,
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        throw new Error(text || `upload failed: ${resp.status}`);
+      }
+      const { job_id } = (await resp.json()) as { job_id: string };
+
+      pollTimerRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`${API_BASE}/status/${job_id}`);
+          if (!r.ok) throw new Error(`status ${r.status}`);
+          const s = (await r.json()) as Status;
+          setStatus(s);
+          if (s.status === "done") {
+            if (pollTimerRef.current) {
+              clearInterval(pollTimerRef.current);
+              pollTimerRef.current = null;
+            }
+            setResultUrl(`${API_BASE}/result/${job_id}`);
+            setBeforeUrl(`${API_BASE}/preview/${job_id}/before`);
+            setView("done");
+          } else if (s.status === "error") {
+            if (pollTimerRef.current) {
+              clearInterval(pollTimerRef.current);
+              pollTimerRef.current = null;
+            }
+            setErrorMsg(s.error ?? "pipeline failed");
+            setView("error");
+          }
+        } catch (err) {
+          // transient; keep polling
+          console.warn("poll error", err);
+        }
+      }, 500);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "upload failed");
+      setView("error");
+    }
+  }, []);
+
+  const onPick = useCallback(
+    (file: File | undefined) => {
+      if (!file) return;
+      const name = file.name.toLowerCase();
+      if (!(name.endsWith(".fit") || name.endsWith(".fits") || name.endsWith(".fts"))) {
+        setErrorMsg("Please drop a .fit, .fits, or .fts file.");
+        setView("error");
+        return;
+      }
+      void uploadFile(file);
+    },
+    [uploadFile],
+  );
+
+  const onDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      setDragActive(false);
+      onPick(e.dataTransfer.files?.[0]);
+    },
+    [onPick],
+  );
+
+  const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragActive(true);
+  };
+  const onDragLeave = () => setDragActive(false);
+
+  if (view === "drop") {
+    return (
+      <main className="page">
+        <div
+          className={`drop-zone${dragActive ? " drop-zone--active" : ""}`}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onClick={() => fileInputRef.current?.click()}
+          role="button"
+          tabIndex={0}
+        >
+          <div className="drop-icon" aria-hidden>
+            ⬈
+          </div>
+          <div className="drop-title">Drop your Seestar FITS file here</div>
+          <div className="drop-sub">or click to browse</div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".fit,.fits,.fts"
+            className="hidden-input"
+            onChange={(e) => onPick(e.target.files?.[0])}
+          />
+        </div>
+        <div className="brand">Seestar Enhance</div>
+      </main>
+    );
+  }
+
+  if (view === "processing") {
+    const pct = Math.round((status?.progress ?? 0) * 100);
+    return (
+      <main className="page page--center">
+        <div className="processing">
+          <div className="spinner" aria-hidden />
+          <div className="processing-title">{stageLabel(status?.stage ?? "queued")}</div>
+          <div className="processing-bar" aria-hidden>
+            <div className="processing-bar-fill" style={{ width: `${pct}%` }} />
+          </div>
+          {status?.classification && (
+            <div className="processing-meta">
+              Profile · <span className="accent">{status.classification}</span>
+            </div>
+          )}
+        </div>
+      </main>
+    );
+  }
+
+  if (view === "done") {
+    return (
+      <main className="page page--done">
+        <div className="result-wrap">
+          <ReactCompareSlider
+            itemOne={
+              <ReactCompareSliderImage
+                src={beforeUrl}
+                alt="Before"
+                style={{ backgroundColor: "#000" }}
+              />
+            }
+            itemTwo={
+              <ReactCompareSliderImage
+                src={resultUrl}
+                alt="After"
+                style={{ backgroundColor: "#000" }}
+              />
+            }
+            style={{ height: "100%", width: "100%" }}
+          />
+        </div>
+        <div className="toolbar">
+          <a className="btn btn-primary" href={resultUrl} download>
+            Download PNG
+          </a>
+          <button className="btn btn-ghost" onClick={reset}>
+            Process another
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <main className="app">
-      <h1>Seestar Enhance</h1>
-      <p>Backend: {health}</p>
-      <p className="muted">UI placeholder. Pipeline coming soon.</p>
+    <main className="page page--center">
+      <div className="error-card">
+        <div className="error-title">Something went wrong</div>
+        <div className="error-msg">{errorMsg}</div>
+        <button className="btn btn-primary" onClick={reset}>
+          Try again
+        </button>
+      </div>
     </main>
   );
 }

@@ -1,0 +1,30 @@
+# Python
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.venv
+**/venv
+**/.env
+
+# Node
+**/node_modules
+**/dist
+**/.vite
+**/*.tsbuildinfo
+
+# Git/IDE
+.git
+.gitignore
+.DS_Store
+
+# Samples are huge; compose doesn't need them baked in (mount them if
+# you want in-container CLI access).
+samples/*.fit
+samples/*.fits
+samples/*.fts
+samples/outputs/
+
+# Docs/CI — keep image small.
+README.md
+HOSTING.md
+BACKLOG.md

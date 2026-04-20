@@ -13,3 +13,4 @@ samples/*.fits
 samples/*.fts
 samples/outputs/
 !samples/.gitkeep
+backend/app/static/

@@ -1,12 +1,10 @@
 services:
-  backend:
-    build: ./backend
-    container_name: seestar-backend
+  app:
+    build:
+      context: .
+    container_name: seestar-enhance
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
-      - ./samples:/app/samples
     environment:
       - PYTHONUNBUFFERED=1
     healthcheck:
@@ -14,16 +12,3 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  frontend:
-    build: ./frontend
-    container_name: seestar-frontend
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    environment:
-      - VITE_API_BASE=http://localhost:8000
-    depends_on:
-      - backend
