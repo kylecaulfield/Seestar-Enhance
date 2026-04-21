@@ -129,33 +129,34 @@ GALAXY: Profile = {
         "smoothing": 1.2,
         "downscale": 8,
     },
-    # Gentler stretch + high white_percentile to preserve the M81-class
-    # core: stretch=14 keeps mid-tones where they are instead of pushing
-    # them into near-clipping; white_percentile=99.97 ensures the bright
-    # core normalises to slightly under 1.0 so arcsinh still produces
-    # gradient (yellow-tan core highlights, not a white blob).
+    # Stretch + white-point combo that lifts the disk out of the noise
+    # floor while still preserving core gradient: stretch=20 is aggressive
+    # enough to make the halo visible; white_percentile=99.995 keeps the
+    # very peak (M81 nucleus) out of clipping so it renders as a warm
+    # yellow-tan rather than a white blob.
     "stretch": {
         "black_percentile": 0.1,
-        "white_percentile": 99.97,
-        "stretch": 14.0,
+        "white_percentile": 99.995,
+        "stretch": 20.0,
     },
-    # Pre-stretch chroma smooth: Gaussian-blur the per-channel chroma
-    # deviation in linear space before arcsinh amplifies it. Sigma=50 px
-    # targets the 100-200 px chromatic blobs left by LP gradient residuals
-    # and Bayer demosaic. Galaxy luma structure (spiral arms, dust lanes)
-    # is unaffected because we only blur the chroma, not the luma.
+    # Pre-stretch chroma smooth: subtract only *very* slow chromatic
+    # variation (sigma=20 → touches blobs larger than ~40 px). M81 and
+    # M82 are 60-80 px across, so their natural disk colour survives the
+    # high-pass intact; only true LP/Bayer blobs on the larger scale get
+    # flattened.
     "color": {
         **DEFAULT["color"],
-        "pre_stretch_chroma_smooth": 50.0,
+        "pre_stretch_chroma_smooth": 20.0,
     },
-    # Galaxy sky noise after stretch is meaningful; boost denoise so the
-    # halo doesn't drown in chroma speckle.
-    "bm3d_denoise": {"sigma": None, "strength": 1.8, "chroma_blur": 7.0},
+    # Gentler chroma_blur so the galaxy's subtle blue-disk / yellow-core
+    # colour separation isn't flattened. Full BM3D luma strength still
+    # denoises the halo.
+    "bm3d_denoise": {"sigma": None, "strength": 1.8, "chroma_blur": 2.5},
     "sharpen": {"radius": 1.2, "amount": 0.35},
-    # Lower contrast so the bright core keeps gradient instead of being
-    # pushed into a white blob; saturation 1.40 keeps colour punch without
-    # needing the S-curve to drive it.
-    "curves": {"contrast": 0.35, "saturation": 1.40},
+    # Higher saturation so the warm core and cooler disk read clearly at
+    # the galaxy's small angular size; lower contrast so the halo keeps
+    # its gradient into the sky.
+    "curves": {"contrast": 0.30, "saturation": 1.65},
 }
 
 
