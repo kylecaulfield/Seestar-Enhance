@@ -79,19 +79,24 @@ NEBULA: Profile = {
     # soft blend so OIII's green-cyan component survives. A hard clip
     # (0.9) over-suppresses OIII and turns the Veil purple instead of
     # the red-Ha + blue-teal-OIII combo that community images show.
+    # pre_stretch_chroma_smooth=80: only remove very-slow chromatic
+    # variation (LP residuals / Bayer blobs). The Veil's narrow filaments
+    # are ~10 px wide so they fall well inside the high-pass band and
+    # keep their colour; 200+ px sky blobs get flattened to neutral.
     "color": {
         "dark_percentile": 25.0,
         "mid_low": 40.0,
         "mid_high": 80.0,
         "wb_strength": 1.0,
         "green_clip": 0.7,
+        "pre_stretch_chroma_smooth": 80.0,
     },
     # Aggressive black point clips the mid-dark chroma speckle to pure
     # black; filaments survive above it. stretch is moderate because
     # once the floor is clipped we don't need to compress as much.
     "stretch": {
-        "black_percentile": 2.0,
-        "stretch": 22.0,
+        "black_percentile": 8.0,
+        "stretch": 20.0,
     },
     # Heavy chroma_blur flattens remaining red/blue speckle in the
     # mid-brightness diffuse region. BM3D sigma is fixed because the
@@ -100,10 +105,10 @@ NEBULA: Profile = {
     # want to re-amplify what we just denoised.
     "bm3d_denoise": {"sigma": 0.15, "strength": 1.0, "chroma_blur": 10.0},
     "sharpen": {"radius": 1.6, "amount": 0.25},
-    # Strong S-curve further pushes residual background toward black;
-    # saturation is tempered because SCNR already biases toward red/blue
-    # and more saturation would posterize the low-SNR diffuse regions.
-    "curves": {"contrast": 0.6, "saturation": 1.15},
+    # High contrast + moderate saturation: crushes the chroma-noise
+    # "blobs" in the sky into near-black while keeping the brighter
+    # filaments visible. Higher saturation would posterize those blobs.
+    "curves": {"contrast": 0.80, "saturation": 1.05},
 }
 
 
@@ -114,11 +119,10 @@ GALAXY: Profile = {
     **DEFAULT,
     # Finer grid than default: M81-class targets have broadband color
     # gradients (LP residuals, amp glow) at scales of a few hundred
-    # pixels. A 16-cell grid fits and subtracts those; 28 left them as
-    # blue/red blotches in the background. Grid must still be coarser
+    # pixels. grid=20 fits those cleanly; grid must still be coarser
     # than the galaxy itself so the fit doesn't eat halo signal.
     "background": {
-        "grid": 16,
+        "grid": 20,
         "sigma": 2.5,
         "iters": 5,
         "smoothing": 1.2,
@@ -140,8 +144,8 @@ GALAXY: Profile = {
     # Galaxy sky noise after stretch is meaningful; boost denoise so the
     # halo doesn't drown in chroma speckle.
     "bm3d_denoise": {"sigma": None, "strength": 1.8, "chroma_blur": 7.0},
-    "sharpen": {"radius": 1.3, "amount": 0.30},
-    "curves": {"contrast": 0.55, "saturation": 1.20},
+    "sharpen": {"radius": 1.2, "amount": 0.40},
+    "curves": {"contrast": 0.70, "saturation": 1.35},
 }
 
 
@@ -165,10 +169,11 @@ CLUSTER: Profile = {
     # cleans sky speckle without touching star cores.
     "bm3d_denoise": {"sigma": None, "strength": 1.2, "chroma_blur": 1.5},
     "sharpen": {"radius": 1.0, "amount": 0.15},
-    # Low contrast: cluster frames are mostly sky, and an aggressive S-curve
-    # crushes the shadows faster than it lifts the stars. Keep saturation
-    # near neutral so white/yellow stars keep their color.
-    "curves": {"contrast": 0.2, "saturation": 1.08},
+    # Mild S-curve: enough to push mid-dark sky toward black and make
+    # faint halo stars pop, without crushing the broad population of
+    # mid-brightness cluster members. Saturation 1.18 gently lifts star
+    # colours (M92 has a mix of yellow and blue stars).
+    "curves": {"contrast": 0.30, "saturation": 1.18},
 }
 
 
