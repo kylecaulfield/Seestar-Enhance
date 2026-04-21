@@ -94,10 +94,15 @@ NEBULA: Profile = {
     # Aggressive black point clips the mid-dark chroma speckle to pure
     # black; filaments survive above it. stretch is moderate because
     # once the floor is clipped we don't need to compress as much.
+    # Main stretch is gentler than v1 because the v2 star-split path
+    # (below) applies a second stretch pass to the starless only.
+    # Aggressive stretch that would bloat stars in v1; the star-split
+    # (below) separates stars from diffuse structure so this level of
+    # arcsinh compression can lift faint filaments without halo ringing.
     "stretch": {
         "black_percentile": 1.5,
         "white_percentile": 99.95,
-        "stretch": 22.0,
+        "stretch": 26.0,
     },
     # Heavy chroma_blur flattens remaining red/blue speckle in the
     # mid-brightness diffuse region. BM3D sigma is fixed because the
@@ -106,10 +111,18 @@ NEBULA: Profile = {
     # want to re-amplify what we just denoised.
     "bm3d_denoise": {"sigma": 0.15, "strength": 1.0, "chroma_blur": 10.0},
     "sharpen": {"radius": 1.6, "amount": 0.25},
-    # Low contrast preserves delicate gradient on the faint outer
-    # filaments; higher saturation lifts Ha (red) and OIII (cyan) so
-    # the real nebula stands out from the grey-ish noise speckle.
+    # Low contrast preserves gradient; moderate saturation because
+    # the starless layer already concentrates all the chroma — applying
+    # 1.35x saturation on a star-free, double-stretched nebula
+    # over-saturates the noise colour.
     "curves": {"contrast": 0.30, "saturation": 1.35},
+    # v2: star/starless split. radius=7 (15 px window) removes the
+    # Seestar PSF stars cleanly while preserving Veil filaments (~10 px
+    # wide). With the split in place the main stretch no longer bloats
+    # every star — we get nebula-favourable stretch aggressiveness and
+    # stars stay point-like. Stars are recombined via screen blend after
+    # all processing, so they carry their natural colour into the final.
+    "stars": {"radius": 7},
 }
 
 

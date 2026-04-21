@@ -40,6 +40,7 @@ from app.stages import (
     curves,
     export,
     sharpen,
+    stars,
     stretch,
 )
 from app.stages.io_fits import load_fits
@@ -124,9 +125,21 @@ def run(
     img = stretch.process(img, **params.get("stretch", {}))
     cb("stretch", 1.0)
 
-    # TODO(v2): insert stars.process(img) here to split stars/starless, then
-    # run denoise on starless only and recombine with screen blend before
-    # sharpen. See backend/app/stages/stars.py and ml_denoise.py stubs.
+    # v2 star-split: for targets where star bloat is the main ceiling on
+    # stretch aggressiveness (i.e. nebulae), split the frame into a
+    # compact-star channel and an extended-structure channel, push the
+    # starless much harder, then screen-blend the original stars back in.
+    # Opt-in via profile param so galaxy and cluster profiles keep the
+    # pure classical path.
+    stars_params = params.get("stars")
+    starless_stretch_params = params.get("starless_stretch")
+    stars_only = None
+    if stars_params is not None:
+        log(f"[5a/{len(_STAGES)}] star/starless split")
+        stars_only, img = stars.process(img, **stars_params)
+        if starless_stretch_params is not None:
+            log("[5b] additional stretch on starless")
+            img = stretch.process(img, **starless_stretch_params)
 
     log(f"[6/{len(_STAGES)}] bm3d denoise (classical)")
     cb("bm3d_denoise", 0.0)
@@ -142,6 +155,12 @@ def run(
     cb("curves", 0.0)
     img = curves.process(img, **params.get("curves", {}))
     cb("curves", 1.0)
+
+    # Screen-blend the unmodified stars back onto the heavily-processed
+    # starless. Must happen after curves so stars don't get double-boosted.
+    if stars_only is not None:
+        log("[8a] recombine starless + stars (screen blend)")
+        img = stars.recombine(stars_only, img)
 
     log(f"[9/{len(_STAGES)}] export -> {output_png}")
     cb("export", 0.0)

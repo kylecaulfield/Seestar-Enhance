@@ -97,9 +97,11 @@ def test_bm3d_denoise_reduces_noise(sample_rgb: np.ndarray) -> None:
     assert denoised_res < noisy_res
 
 
-def test_stars_stub_raises(sample_rgb: np.ndarray) -> None:
-    with pytest.raises(NotImplementedError):
-        stars.process(sample_rgb)
+def test_stars_splits_into_two_arrays(sample_rgb: np.ndarray) -> None:
+    # v2: classical star/starless split. Detailed behaviour is in test_stars.py.
+    stars_only, starless = stars.process(sample_rgb, radius=5)
+    assert stars_only.shape == sample_rgb.shape
+    assert starless.shape == sample_rgb.shape
 
 
 def test_ml_denoise_stub_raises(sample_rgb: np.ndarray) -> None:
