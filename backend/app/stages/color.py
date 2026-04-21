@@ -9,10 +9,16 @@
    Bayer sensors — the Seestar in particular leaves a strong green cast
    in diffuse regions that WB alone can't remove once the nebulosity
    itself is channel-biased.
+4. Optional pre-stretch chroma smoothing: Gaussian-blur the per-channel
+   deviation from luma to suppress large-scale chromatic non-uniformity
+   (Bayer demosaic residuals, LP gradient residuals) before the arcsinh
+   stretch amplifies those tiny differences into visible colour blotches.
+   Must be done in linear space (before stretch), not after.
 """
 from __future__ import annotations
 
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
 
 def _percentile_mask(luma: np.ndarray, low: float, high: float) -> np.ndarray:
@@ -30,6 +36,7 @@ def process(
     mid_high: float = 80.0,
     wb_strength: float = 1.0,
     green_clip: float = 0.0,
+    pre_stretch_chroma_smooth: float = 0.0,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")
@@ -76,5 +83,21 @@ def process(
         threshold = 0.5 * (r + b)
         clipped = np.minimum(g, threshold)
         img[..., 1] = g * (1.0 - amount) + clipped * amount
+
+    if pre_stretch_chroma_smooth > 0.0:
+        # High-pass chroma equalization: estimate the slowly-varying
+        # per-channel color offset (LP gradient residuals, Bayer demosaic
+        # structure) and subtract it, leaving luma and fine-scale chroma
+        # (star colours, galaxy detail) intact. Must be done in linear
+        # space before arcsinh amplifies the tiny offsets into visible blobs.
+        luma3 = img.mean(axis=-1, keepdims=True)
+        chroma = img - luma3  # per-channel deviation from luma
+        sigma = float(pre_stretch_chroma_smooth)
+        slow_chroma = np.stack(
+            [gaussian_filter(chroma[..., c], sigma=sigma) for c in range(3)],
+            axis=-1,
+        )
+        # Remove only the slow colour variation; keep fast chroma intact.
+        img = np.clip(img - slow_chroma, 0.0, None).astype(np.float32)
 
     return np.clip(img, 0.0, 1.0).astype(np.float32)

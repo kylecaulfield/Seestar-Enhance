@@ -41,6 +41,7 @@ DEFAULT: Profile = {
         "mid_high": 80.0,
         "wb_strength": 1.0,
         "green_clip": 0.5,
+        "pre_stretch_chroma_smooth": 0.0,
     },
     "stretch": {
         "black_percentile": 0.1,
@@ -127,10 +128,17 @@ GALAXY: Profile = {
         "black_percentile": 0.1,
         "stretch": 22.0,
     },
+    # Pre-stretch chroma smooth: Gaussian-blur the per-channel chroma
+    # deviation in linear space before arcsinh amplifies it. Sigma=50 px
+    # targets the 100-200 px chromatic blobs left by LP gradient residuals
+    # and Bayer demosaic. Galaxy luma structure (spiral arms, dust lanes)
+    # is unaffected because we only blur the chroma, not the luma.
+    "color": {
+        **DEFAULT["color"],
+        "pre_stretch_chroma_smooth": 50.0,
+    },
     # Galaxy sky noise after stretch is meaningful; boost denoise so the
-    # halo doesn't drown in chroma speckle. Heavy chroma_blur is safe
-    # here because galaxy detail (dust lanes, spiral arms) lives in luma,
-    # not chroma — the background Bayer demosaic speckle is pure chroma.
+    # halo doesn't drown in chroma speckle.
     "bm3d_denoise": {"sigma": None, "strength": 1.8, "chroma_blur": 7.0},
     "sharpen": {"radius": 1.3, "amount": 0.30},
     "curves": {"contrast": 0.55, "saturation": 1.20},
