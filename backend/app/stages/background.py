@@ -3,8 +3,17 @@
 Samples the image on a coarse grid, sigma-clips the samples to reject stars
 and bright nebulosity, fits a smooth radial basis function through the
 remaining sky samples, and subtracts it from each channel independently.
+
+An optional `sky_mask` parameter lets the caller supply a pre-computed
+boolean map of "this pixel is sky". Grid samples that fall outside the
+mask are rejected before sigma-clipping — much more principled than
+hoping sigma-clipping can find the sky on its own for frames where the
+subject dominates the histogram (dense star clusters, tight galaxy
+framings).
 """
 from __future__ import annotations
+
+from typing import Optional
 
 import numpy as np
 from scipy.interpolate import RBFInterpolator
@@ -34,6 +43,7 @@ def _fit_channel(
     iters: int,
     smoothing: float,
     downscale: int,
+    sky_mask: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     h, w = channel.shape
     ys = np.linspace(0, h - 1, grid, dtype=np.float32)
@@ -47,6 +57,11 @@ def _fit_channel(
     coords = np.stack([yy.ravel(), xx.ravel()], axis=1).astype(np.float32)
 
     mask = _sigma_clip(samples, sigma=sigma, iters=iters)
+    # Further restrict to caller-supplied sky mask if provided.
+    if sky_mask is not None:
+        mask_sampled = sky_mask[sample_y, sample_x].ravel().astype(bool)
+        mask = mask & mask_sampled
+
     if mask.sum() < 16:
         return np.full_like(channel, float(np.median(samples)), dtype=np.float32)
 
@@ -80,9 +95,16 @@ def process(
     iters: int = 5,
     smoothing: float = 1.0,
     downscale: int = 8,
+    sky_mask: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")
+    if sky_mask is not None:
+        if sky_mask.shape != image.shape[:2] or sky_mask.dtype != bool:
+            raise ValueError(
+                f"sky_mask must be bool of shape {image.shape[:2]}, got "
+                f"{sky_mask.shape} / {sky_mask.dtype}"
+            )
 
     out = np.empty_like(image, dtype=np.float32)
     for c in range(3):
@@ -93,6 +115,7 @@ def process(
             iters=iters,
             smoothing=smoothing,
             downscale=downscale,
+            sky_mask=sky_mask,
         )
         pedestal = float(np.median(bg))
         out[..., c] = image[..., c] - bg + pedestal

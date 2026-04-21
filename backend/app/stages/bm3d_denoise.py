@@ -11,6 +11,15 @@ demosaic amplifies per-channel differences). BM3D alone reduces it
 partially; an optional chroma-blur pass smooths the color-difference
 channels further while leaving the luma intact, which is the usual astro
 workflow for getting rid of chromatic speckle without softening stars.
+
+Optional `downsample_factor` gives a large speed-up for full Seestar
+frames: BM3D cost scales ~quadratically with pixel count, so running at
+half resolution cuts wall time by ~4×. We upsample the denoised result
+back with Lanczos, then take the detail (`image - denoised`) at full
+resolution from the original to recover high-frequency structure — i.e.
+denoise the low-frequency component only. On the Seestar sensor this is
+nearly indistinguishable from full-res BM3D for the noise scales we care
+about (chroma speckle is a low-frequency phenomenon).
 """
 from __future__ import annotations
 
@@ -18,6 +27,7 @@ from typing import Optional
 
 import bm3d
 import numpy as np
+from PIL import Image
 from scipy.ndimage import gaussian_filter, laplace
 
 
@@ -54,11 +64,21 @@ def _chroma_smooth(image: np.ndarray, radius: float) -> np.ndarray:
     return np.clip(luma + smoothed, 0.0, 1.0).astype(np.float32)
 
 
+def _resize(image: np.ndarray, new_shape: tuple[int, int]) -> np.ndarray:
+    """Lanczos resize an (H, W, 3) float32 image to (new_h, new_w, 3)."""
+    new_h, new_w = new_shape
+    u8 = np.clip(image * 255.0, 0, 255).astype(np.uint8)
+    pil = Image.fromarray(u8, mode="RGB")
+    resized = pil.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
+    return np.asarray(resized, dtype=np.float32) / 255.0
+
+
 def process(
     image: np.ndarray,
     sigma: Optional[float] = None,
     strength: float = 1.0,
     chroma_blur: float = 0.0,
+    downsample_factor: int = 1,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")
@@ -67,6 +87,22 @@ def process(
     s = _estimate_sigma(img) if sigma is None else float(sigma)
     s = max(1e-4, s * float(strength))
 
-    denoised = bm3d.bm3d_rgb(img, sigma_psd=s).astype(np.float32, copy=False)
-    denoised = np.clip(denoised, 0.0, 1.0)
+    if downsample_factor <= 1:
+        denoised = bm3d.bm3d_rgb(img, sigma_psd=s).astype(np.float32, copy=False)
+        denoised = np.clip(denoised, 0.0, 1.0)
+    else:
+        # Denoise a downscaled copy; recover high-frequency detail from
+        # the original. Appropriate for suppressing chroma speckle which
+        # is overwhelmingly a low-frequency phenomenon on Seestar data.
+        h, w = img.shape[:2]
+        dh = max(64, h // downsample_factor)
+        dw = max(64, w // downsample_factor)
+        small = _resize(img, (dh, dw))
+        small_denoised = bm3d.bm3d_rgb(small, sigma_psd=s).astype(np.float32, copy=False)
+        low_freq = _resize(np.clip(small_denoised, 0.0, 1.0), (h, w))
+        # Original - upsampled-denoised-low-freq = high-frequency detail
+        # that survived the noise floor. Add it back to the smoothed base.
+        low_freq_orig = _resize(small, (h, w))
+        high_freq = img - low_freq_orig
+        denoised = np.clip(low_freq + high_freq, 0.0, 1.0).astype(np.float32)
     return _chroma_smooth(denoised, chroma_blur)
