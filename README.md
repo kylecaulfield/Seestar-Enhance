@@ -15,6 +15,8 @@ Licensed under the [MIT License](LICENSE).
 - [Repository layout](#repository-layout)
 - [Quickstart](#quickstart)
   - [Docker Compose](#docker-compose)
+  - [Prebuilt image (ghcr.io)](#prebuilt-image-ghcrio)
+  - [Unraid](#unraid)
   - [Native (development)](#native-development)
 - [Using the web app](#using-the-web-app)
 - [Hosting](#hosting)
@@ -59,6 +61,7 @@ removal). Hooks for v2 ML stages are already wired up as
 ├── BACKLOG.md              Planned work, tracked by area.
 ├── Dockerfile              Multi-stage: builds SPA, serves from FastAPI.
 ├── docker-compose.yml      Single service on :8000 (API + UI).
+├── .github/workflows/      GHA: docker build+push to ghcr.io on main.
 ├── backend/                FastAPI service + image pipeline (Python 3.11).
 │   ├── pyproject.toml
 │   ├── requirements.txt
@@ -85,6 +88,87 @@ docker compose up --build
 Open http://localhost:8000. A single container serves both the web UI
 and the API. Drop a Seestar `.fit` / `.fits` / `.fts` file on the page,
 watch the progress view, scrub the before/after slider, hit **Download**.
+
+### Prebuilt image (ghcr.io)
+
+Each push to `main` and every `v*.*.*` tag builds a multi-arch image
+(`linux/amd64` + `linux/arm64`) on GitHub Actions and publishes it to
+GitHub Container Registry:
+
+```
+ghcr.io/kylecaulfield/seestar-enhance:latest
+ghcr.io/kylecaulfield/seestar-enhance:sha-<short>     # per-commit, immutable
+ghcr.io/kylecaulfield/seestar-enhance:v1.2.3          # on release tags
+```
+
+Run it anywhere `docker` works — no git clone required:
+
+```sh
+docker run -d \
+  --name seestar-enhance \
+  -p 8000:8000 \
+  --restart unless-stopped \
+  ghcr.io/kylecaulfield/seestar-enhance:latest
+```
+
+The image bakes in a `HEALTHCHECK` against `/health`, so
+`docker ps` will show container health as `healthy` once it's ready.
+
+Update with:
+
+```sh
+docker pull ghcr.io/kylecaulfield/seestar-enhance:latest && \
+docker rm -f seestar-enhance && \
+docker run -d --name seestar-enhance -p 8000:8000 \
+  --restart unless-stopped \
+  ghcr.io/kylecaulfield/seestar-enhance:latest
+```
+
+### Unraid
+
+The prebuilt image above is the path of least resistance on Unraid.
+
+**Unraid → Docker → Add Container**, then fill in:
+
+| Field | Value |
+| --- | --- |
+| Name | `seestar-enhance` |
+| Repository | `ghcr.io/kylecaulfield/seestar-enhance:latest` |
+| Network Type | `Bridge` (default) |
+| Console shell command | `sh` |
+| Privileged | off |
+| WebUI | `http://[IP]:[PORT:8000]/` |
+
+Add one **Port** mapping:
+
+| Config Type | Name | Container Port | Host Port | Connection Type |
+| --- | --- | --- | --- | --- |
+| Port | Web | `8000` | `8000` | TCP |
+
+No volume mounts are strictly required — per-job temp files live in
+the container's `/tmp` and are cleaned up an hour after each job
+finishes (see [BACKLOG.md](BACKLOG.md) / the `_JOB_TTL_SECONDS` constant
+in `backend/app/main.py`). If you want jobs to survive container
+restarts, add a path mapping:
+
+| Config Type | Name | Container Path | Host Path | Access Mode |
+| --- | --- | --- | --- | --- |
+| Path | Temp jobs | `/tmp/seestar-enhance-jobs` | `/mnt/user/appdata/seestar-enhance/jobs` | Read/Write |
+
+The image runs as a non-root user (UID 10001). If you use a custom host
+path, make sure Unraid's `nobody`/`users` permissions (`99:100`) on
+`/mnt/user/appdata/seestar-enhance/` are writable by that UID — easiest
+fix is:
+
+```sh
+chown -R 10001:10001 /mnt/user/appdata/seestar-enhance
+```
+
+**Updating**: Unraid's Docker tab → click the container → **Force Update**.
+The `:latest` tag on GHCR tracks the default branch automatically.
+
+For a more detailed Unraid walkthrough (Compose Manager, NGINX Proxy
+Manager, User Scripts for auto-update), see [HOSTING.md](HOSTING.md).
 
 ### Native (development)
 
