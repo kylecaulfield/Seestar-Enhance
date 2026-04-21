@@ -35,6 +35,13 @@ COPY backend/ ./
 # (non-docker) runs still work without a build step.
 COPY --from=frontend-build /ui/dist ./app/static
 
+# Drop privileges: the pipeline and web server don't need root. Creating
+# the user after COPYing narrows chown scope to just what's needed.
+RUN useradd --system --no-create-home --uid 10001 appuser \
+ && chown -R appuser:appuser /app
+
+USER appuser
+
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

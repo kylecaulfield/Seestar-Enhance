@@ -58,7 +58,15 @@ _MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 
 # 2 parallel pipelines is plenty on a typical box; BM3D already uses
 # multiple cores internally and running too many in parallel thrashes.
-_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
+_MAX_WORKERS = 2
+_EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="pipeline")
+
+# Cap active+queued pipeline work so a single flood of uploads can't queue
+# hours of backlog or fill disk with temp dirs faster than the reaper can
+# clear them. Cap is deliberately small: 2 workers × 3 = 6 in flight is
+# enough for a handful of legitimate concurrent users.
+_MAX_INFLIGHT_JOBS = _MAX_WORKERS * 3
+_inflight_count = 0
 
 # Static SPA is built into backend/app/static by the Dockerfile. If it's
 # missing we skip the static mount (dev runs use vite on :5173 instead).
@@ -161,6 +169,10 @@ def _run_job(job_id: str) -> None:
             job.status = "error"
             job.error = _friendly_error(exc)
             job.terminated_at = time.time()
+    finally:
+        global _inflight_count
+        with _JOBS_LOCK:
+            _inflight_count -= 1
 
 
 def _friendly_error(exc: BaseException) -> str:
@@ -267,6 +279,19 @@ async def process_endpoint(file: UploadFile) -> dict[str, str]:
     ):
         raise HTTPException(status_code=400, detail="expected a .fit/.fits/.fts file")
 
+    # Queue cap: reject uploads when there's already enough in-flight work
+    # to keep every pipeline worker busy for a while. Stops a single client
+    # from queueing hours of backlog and filling /tmp faster than the reaper
+    # can keep up. Counter is bumped here and decremented in _run_job.
+    global _inflight_count
+    with _JOBS_LOCK:
+        if _inflight_count >= _MAX_INFLIGHT_JOBS:
+            raise HTTPException(
+                status_code=429,
+                detail="server busy; please retry in a moment",
+            )
+        _inflight_count += 1
+
     job_id = uuid.uuid4().hex
     job_dir = _WORK_ROOT / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -311,6 +336,8 @@ async def process_endpoint(file: UploadFile) -> dict[str, str]:
                 )
     except HTTPException:
         shutil.rmtree(job_dir, ignore_errors=True)
+        with _JOBS_LOCK:
+            _inflight_count -= 1
         raise
 
     job = Job(

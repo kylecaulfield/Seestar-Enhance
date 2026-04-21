@@ -18,6 +18,76 @@ PathLike = Union[str, Path]
 
 _VALID_BAYER_PATTERNS = {"RGGB", "BGGR", "GRBG", "GBRG"}
 
+# Defence against "FITS bomb" uploads: a tiny file whose header declares
+# enormous image dimensions. astropy.io.fits eagerly allocates a numpy
+# array sized by NAXIS1 * NAXIS2 * |BITPIX|/8 before reading any data, so
+# we pre-parse the primary header and reject files declaring more than
+# this many bytes of image data. A Seestar S50 raw frame is ~2.5 MP *
+# 2 bytes = ~5 MB; 2 GiB leaves plenty of headroom for stacked output.
+_MAX_DECLARED_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def _validate_fits_header(path: PathLike) -> None:
+    """Pre-parse the FITS primary header and reject obviously hostile files.
+
+    Reads only the first header block(s) — never the data region — and
+    walks the 80-char cards manually so we never hand a bomb to astropy.
+    Raises ValueError on anything suspicious.
+    """
+    block_size = 2880
+    card_size = 80
+    values: dict[str, str] = {}
+
+    with open(path, "rb") as f:
+        # A FITS header can span multiple 2880-byte blocks; read up to 5
+        # blocks (14400 bytes, room for ~180 cards) before giving up.
+        for _ in range(5):
+            block = f.read(block_size)
+            if len(block) < block_size:
+                raise ValueError("FITS header truncated")
+            end_marker_found = False
+            for i in range(0, block_size, card_size):
+                card = block[i : i + card_size].decode("ascii", errors="replace")
+                key = card[:8].strip()
+                if key == "END":
+                    end_marker_found = True
+                    break
+                if "=" in card[:10]:
+                    value_part = card[10:].split("/", 1)[0].strip()
+                    values[key] = value_part.strip("' ")
+            if end_marker_found:
+                break
+        else:
+            raise ValueError("FITS header did not terminate within 5 blocks")
+
+    def _as_int(name: str, default: int = 0) -> int:
+        try:
+            return int(values.get(name, default))
+        except (TypeError, ValueError):
+            raise ValueError(f"FITS header {name} is not an integer") from None
+
+    bitpix = _as_int("BITPIX")
+    naxis = _as_int("NAXIS")
+    if naxis < 0 or naxis > 4:
+        raise ValueError(f"FITS NAXIS={naxis} outside supported range")
+    if bitpix not in (8, 16, 32, 64, -32, -64):
+        raise ValueError(f"FITS BITPIX={bitpix} not recognised")
+
+    total = 1
+    for axis in range(1, naxis + 1):
+        dim = _as_int(f"NAXIS{axis}")
+        if dim <= 0:
+            return  # NAXIS=0 or missing size ⇒ no image data, safe.
+        if dim > 100_000:
+            raise ValueError(f"FITS NAXIS{axis}={dim} exceeds plausible image size")
+        total *= dim
+    declared_bytes = total * (abs(bitpix) // 8)
+    if declared_bytes > _MAX_DECLARED_IMAGE_BYTES:
+        raise ValueError(
+            f"FITS declares {declared_bytes} bytes of image data; "
+            f"max allowed is {_MAX_DECLARED_IMAGE_BYTES}"
+        )
+
 
 def _detect_bayer_pattern(header: fits.Header) -> str:
     """Read the Bayer pattern from a FITS header.
@@ -73,6 +143,7 @@ def load_fits(path: PathLike) -> np.ndarray:
     np.ndarray
         Float32 array of shape (H, W, 3) with values in [0, 1].
     """
+    _validate_fits_header(path)
     with fits.open(str(path), memmap=False) as hdul:
         primary = hdul[0]
         data = primary.data
