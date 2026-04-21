@@ -19,10 +19,13 @@ upgrade path.
 from __future__ import annotations
 
 import logging
+import shutil
 import tempfile
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -41,6 +44,17 @@ logger = logging.getLogger(__name__)
 
 _WORK_ROOT = Path(tempfile.gettempdir()) / "seestar-enhance-jobs"
 _WORK_ROOT.mkdir(parents=True, exist_ok=True)
+
+# FITS files start with an ASCII "SIMPLE  =" card in the primary HDU.
+# We peek at the first chunk of each upload and reject anything else
+# before scheduling a worker — otherwise non-FITS bytes crash deep inside
+# astropy with an implementation-flavoured error that leaks to the client.
+_FITS_MAGIC = b"SIMPLE  ="
+_MAGIC_LEN = len(_FITS_MAGIC)
+
+# Upload size cap. Real Seestar S50 stacked FITS top out around ~250 MB;
+# 500 MB gives headroom and still rejects obvious DoS uploads.
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 
 # 2 parallel pipelines is plenty on a typical box; BM3D already uses
 # multiple cores internally and running too many in parallel thrashes.
@@ -62,10 +76,19 @@ class Job:
     output_path: Path = field(default_factory=Path)
     before_path: Path = field(default_factory=Path)
     classification: Optional[str] = None
+    # Unix timestamp when the job reached a terminal state (done/error).
+    # None while queued/running. Used by the reaper to enforce the TTL.
+    terminated_at: Optional[float] = None
 
 
 _JOBS: dict[str, Job] = {}
 _JOBS_LOCK = threading.Lock()
+
+# Jobs in a terminal state (done/error) are reaped this many seconds after
+# they finish. An hour gives the user plenty of time to download the PNG;
+# the reaper runs frequently enough that disk doesn't accumulate.
+_JOB_TTL_SECONDS = 3600
+_REAPER_INTERVAL_SECONDS = 60
 
 
 def _save_before_preview(fits_path: Path, png_path: Path) -> None:
@@ -107,12 +130,15 @@ def _run_job(job_id: str) -> None:
         # Classify up front so the UI can surface the picked profile in
         # /status while the long BM3D stage runs. pipeline.run() will pick
         # the same one since we pass it explicitly.
+        # NB: classify() is CPU-bound (~1s on real Seestar FITS) — do not
+        # hold _JOBS_LOCK across it or every /status poll blocks.
         from app.stages.classify import classify
 
         img = load_fits(job.input_path)
-        with _JOBS_LOCK:
-            job.classification = classify(img)
+        classification = classify(img)
         del img
+        with _JOBS_LOCK:
+            job.classification = classification
 
         run(
             job.input_path,
@@ -125,14 +151,95 @@ def _run_job(job_id: str) -> None:
             job.status = "done"
             job.stage = "done"
             job.progress = 1.0
+            job.terminated_at = time.time()
     except Exception as exc:
         logger.exception("job %s failed", job_id)
+        # Surface a user-friendly message; the full traceback is in the
+        # server log. Astropy raises a dense multi-line OSError on malformed
+        # FITS that does not belong in a web UI.
         with _JOBS_LOCK:
             job.status = "error"
-            job.error = str(exc)
+            job.error = _friendly_error(exc)
+            job.terminated_at = time.time()
 
 
-app = FastAPI(title="Seestar Enhance API", version="0.1.0")
+def _friendly_error(exc: BaseException) -> str:
+    name = type(exc).__name__
+    if name == "OSError" or name.endswith("VerifyError") or name.endswith("HeaderParsingError"):
+        return "Could not parse the uploaded file as a Seestar FITS image."
+    return f"{name}: {str(exc)[:200]}"
+
+
+def _sweep_orphan_dirs() -> None:
+    """Delete any job directories left behind by a previous process.
+
+    Called at import time. Anything under _WORK_ROOT is stale by definition
+    since the in-memory _JOBS dict starts empty on every boot.
+    """
+    if not _WORK_ROOT.is_dir():
+        return
+    for entry in _WORK_ROOT.iterdir():
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+
+
+def _reap_expired_jobs() -> None:
+    """Remove terminal jobs older than _JOB_TTL_SECONDS and their temp dirs."""
+    now = time.time()
+    to_remove: list[str] = []
+    with _JOBS_LOCK:
+        for job_id, job in _JOBS.items():
+            if job.terminated_at is None:
+                continue
+            if now - job.terminated_at >= _JOB_TTL_SECONDS:
+                to_remove.append(job_id)
+        for job_id in to_remove:
+            job = _JOBS.pop(job_id)
+    # rmtree runs outside the lock; disk IO should not block status polls.
+    for job_id in to_remove:
+        job_dir = _WORK_ROOT / job_id
+        shutil.rmtree(job_dir, ignore_errors=True)
+    if to_remove:
+        logger.info("reaped %d expired jobs", len(to_remove))
+
+
+def _reaper_loop(stop_event: threading.Event) -> None:
+    while not stop_event.wait(_REAPER_INTERVAL_SECONDS):
+        try:
+            _reap_expired_jobs()
+        except Exception:  # noqa: BLE001
+            logger.exception("reaper iteration failed")
+
+
+_REAPER_STOP = threading.Event()
+_REAPER_THREAD: Optional[threading.Thread] = None
+
+
+def _start_reaper() -> None:
+    global _REAPER_THREAD
+    if _REAPER_THREAD is not None:
+        return
+    _sweep_orphan_dirs()
+    t = threading.Thread(
+        target=_reaper_loop,
+        args=(_REAPER_STOP,),
+        name="job-reaper",
+        daemon=True,
+    )
+    t.start()
+    _REAPER_THREAD = t
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):  # noqa: ANN001 — FastAPI lifespan signature
+    _start_reaper()
+    try:
+        yield
+    finally:
+        _REAPER_STOP.set()
+
+
+app = FastAPI(title="Seestar Enhance API", version="0.1.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -168,9 +275,43 @@ async def process_endpoint(file: UploadFile) -> dict[str, str]:
     output_path = job_dir / "output.png"
     before_path = job_dir / "before.png"
 
-    with input_path.open("wb") as f:
-        while chunk := await file.read(1 << 20):
-            f.write(chunk)
+    # Stream to disk while enforcing a size cap and validating the first
+    # bytes look like a FITS primary HDU. A leading buffer accumulates
+    # until we have enough bytes to compare against the magic, then the
+    # bytes flush to disk; all further chunks pass through.
+    total = 0
+    header_buf = bytearray()
+    magic_ok = False
+    try:
+        with input_path.open("wb") as f:
+            while chunk := await file.read(1 << 20):
+                total += len(chunk)
+                if total > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"file exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB cap",
+                    )
+                if not magic_ok:
+                    header_buf.extend(chunk)
+                    if len(header_buf) >= _MAGIC_LEN:
+                        if bytes(header_buf[:_MAGIC_LEN]) != _FITS_MAGIC:
+                            raise HTTPException(
+                                status_code=400,
+                                detail="not a valid FITS file (missing SIMPLE header)",
+                            )
+                        magic_ok = True
+                        f.write(bytes(header_buf))
+                        header_buf.clear()
+                else:
+                    f.write(chunk)
+            if not magic_ok:
+                # Stream ended before we saw enough bytes.
+                raise HTTPException(
+                    status_code=400, detail="file is too small to be a FITS image"
+                )
+    except HTTPException:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
 
     job = Job(
         id=job_id,
