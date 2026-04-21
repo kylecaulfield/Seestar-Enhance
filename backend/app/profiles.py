@@ -142,15 +142,17 @@ GALAXY: Profile = {
         "smoothing": 1.2,
         "downscale": 8,
     },
-    # Stretch + white-point combo that lifts the disk out of the noise
-    # floor while still preserving core gradient: stretch=20 is aggressive
-    # enough to make the halo visible; white_percentile=99.995 keeps the
-    # very peak (M81 nucleus) out of clipping so it renders as a warm
-    # yellow-tan rather than a white blob.
+    # Stretch lifts the disk out of the noise floor while
+    # white_percentile=99.997 keeps the M81 nucleus from clipping to
+    # pure white; note we intentionally DO NOT use the v2 star-split on
+    # this profile because median-based removal steals the bright
+    # galactic nucleus (classifies it as a "star"). The nucleus needs to
+    # travel through the saturation + stretch steps for the warm-yellow
+    # core colour to render; splitting it off re-adds it unmodified.
     "stretch": {
         "black_percentile": 0.1,
-        "white_percentile": 99.995,
-        "stretch": 20.0,
+        "white_percentile": 99.997,
+        "stretch": 23.0,
     },
     # Pre-stretch chroma smooth: subtract only *very* slow chromatic
     # variation (sigma=20 → touches blobs larger than ~40 px). M81 and
@@ -166,10 +168,10 @@ GALAXY: Profile = {
     # denoises the halo.
     "bm3d_denoise": {"sigma": None, "strength": 1.8, "chroma_blur": 2.5},
     "sharpen": {"radius": 1.2, "amount": 0.35},
-    # Higher saturation so the warm core and cooler disk read clearly at
-    # the galaxy's small angular size; lower contrast so the halo keeps
-    # its gradient into the sky.
-    "curves": {"contrast": 0.30, "saturation": 1.65},
+    # Higher saturation so the warm core reads as yellow-orange at the
+    # galaxy's small angular size; contrast kept moderate so the halo
+    # keeps its gradient into the sky.
+    "curves": {"contrast": 0.35, "saturation": 1.85},
 }
 
 
