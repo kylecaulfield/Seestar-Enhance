@@ -96,7 +96,8 @@ NEBULA: Profile = {
     # once the floor is clipped we don't need to compress as much.
     "stretch": {
         "black_percentile": 8.0,
-        "stretch": 20.0,
+        "white_percentile": 99.95,
+        "stretch": 16.0,
     },
     # Heavy chroma_blur flattens remaining red/blue speckle in the
     # mid-brightness diffuse region. BM3D sigma is fixed because the
@@ -128,9 +129,15 @@ GALAXY: Profile = {
         "smoothing": 1.2,
         "downscale": 8,
     },
+    # Gentler stretch + high white_percentile to preserve the M81-class
+    # core: stretch=14 keeps mid-tones where they are instead of pushing
+    # them into near-clipping; white_percentile=99.97 ensures the bright
+    # core normalises to slightly under 1.0 so arcsinh still produces
+    # gradient (yellow-tan core highlights, not a white blob).
     "stretch": {
         "black_percentile": 0.1,
-        "stretch": 22.0,
+        "white_percentile": 99.97,
+        "stretch": 14.0,
     },
     # Pre-stretch chroma smooth: Gaussian-blur the per-channel chroma
     # deviation in linear space before arcsinh amplifies it. Sigma=50 px
@@ -144,8 +151,11 @@ GALAXY: Profile = {
     # Galaxy sky noise after stretch is meaningful; boost denoise so the
     # halo doesn't drown in chroma speckle.
     "bm3d_denoise": {"sigma": None, "strength": 1.8, "chroma_blur": 7.0},
-    "sharpen": {"radius": 1.2, "amount": 0.40},
-    "curves": {"contrast": 0.70, "saturation": 1.35},
+    "sharpen": {"radius": 1.2, "amount": 0.35},
+    # Lower contrast so the bright core keeps gradient instead of being
+    # pushed into a white blob; saturation 1.40 keeps colour punch without
+    # needing the S-curve to drive it.
+    "curves": {"contrast": 0.35, "saturation": 1.40},
 }
 
 
@@ -161,19 +171,22 @@ CLUSTER: Profile = {
         "smoothing": 1.0,
         "downscale": 8,
     },
+    # Cluster cores are dense — individual bright stars blow out first.
+    # stretch=11 + white_percentile=99.97 keeps the core resolved into
+    # stars rather than a single saturated blob.
     "stretch": {
         "black_percentile": 0.2,
-        "stretch": 18.0,
+        "white_percentile": 99.97,
+        "stretch": 11.0,
     },
     # Clusters have dark sky with tight star PSFs; a mild chroma blur
     # cleans sky speckle without touching star cores.
     "bm3d_denoise": {"sigma": None, "strength": 1.2, "chroma_blur": 1.5},
     "sharpen": {"radius": 1.0, "amount": 0.15},
-    # Mild S-curve: enough to push mid-dark sky toward black and make
-    # faint halo stars pop, without crushing the broad population of
-    # mid-brightness cluster members. Saturation 1.18 gently lifts star
-    # colours (M92 has a mix of yellow and blue stars).
-    "curves": {"contrast": 0.30, "saturation": 1.18},
+    # Very mild S-curve so the packed cluster core keeps star-to-star
+    # gradient. Saturation 1.25 lifts the yellow-white-blue star
+    # population without hue-clipping.
+    "curves": {"contrast": 0.15, "saturation": 1.25},
 }
 
 
