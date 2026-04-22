@@ -200,7 +200,11 @@ NEBULA_WIDE: Profile = {
         **NEBULA["color"],
         "ccm": None,
         "wb_strength": 0.0,
-        "green_clip": 0.3,
+        # SPCC already shifts chroma via the fitted gains; running a
+        # hard SCNR on top of that pushes green completely out and
+        # leaves R/B ratios skewed. Gentle SCNR is enough to tame
+        # residual Seestar green without fighting SPCC.
+        "green_clip": 0.15,
     },
     "stretch": {
         "black_percentile": 3.0,
@@ -214,15 +218,21 @@ NEBULA_WIDE: Profile = {
         "chroma_edge_aware": True,
         "chroma_edge_luma_sigma": 0.06,
     },
-    # Drop channel_gains here — SPCC's CCM already shifts the image
-    # toward the Gaia-derived colour balance, so a post-stretch gain
-    # layer would push too far.
+    # Saturation 1.0 — SPCC's fitted gains plus the arcsinh stretch
+    # together already produce enough chroma for an emission nebula.
+    # A positive saturation on top over-saturates the Ha-red regions
+    # we're calibrating toward.
     "curves": {
         "contrast": 0.65,
-        "saturation": 1.25,
+        "saturation": 1.0,
         "saturation_mode": "hsv",
     },
-    "spcc": {"min_matches": 20},
+    # strength=0.45 — apply 45% of SPCC's fitted gain. Full strength
+    # (1.0) on broadband Seestar data pushes R too hard because Gaia's
+    # RP band is wider / extends further into the IR than a camera's
+    # red filter. Dialling back lets us keep the SPCC star-match
+    # direction without overcooking the result.
+    "spcc": {"min_matches": 20, "strength": 0.45},
     # Wide nebulae don't benefit much from star split — the diffuse
     # signal is too embedded in the star field for median-based
     # separation to help cleanly — but the split also doesn't hurt,
@@ -243,7 +253,7 @@ NEBULA_FILAMENT: Profile = {
         **NEBULA["color"],
         "ccm": None,
         "wb_strength": 0.0,
-        "green_clip": 0.5,
+        "green_clip": 0.3,
     },
     "stretch": {
         "black_percentile": 15.0,
@@ -257,12 +267,19 @@ NEBULA_FILAMENT: Profile = {
         "chroma_edge_aware": True,
         "chroma_edge_luma_sigma": 0.10,
     },
+    # Saturation 1.0 — SPCC + stretch already supply enough chroma
+    # for Veil-class targets. Saturation > 1 on top over-saturates
+    # the filaments and starts showing chroma noise in the sky.
     "curves": {
         "contrast": 1.0,
-        "saturation": 1.3,
+        "saturation": 1.0,
         "saturation_mode": "hsv",
     },
-    "spcc": {"min_matches": 20},
+    # strength=0.5 — filament profiles have cleaner sky so we tolerate
+    # a slightly stronger SPCC application than nebula_wide. Still
+    # dialled well back from 1.0 for the same Gaia-bands-vs-camera
+    # mismatch reason explained in the NEBULA_WIDE profile above.
+    "spcc": {"min_matches": 20, "strength": 0.5},
     # Smaller radius so the filament's ~5-8 px narrow structure isn't
     # caught by the median filter as a "star" — keeps it in the
     # starless layer where it can be stretched aggressively.

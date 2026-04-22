@@ -203,6 +203,7 @@ def test_spcc_fit_moves_pixels_under_miscalibration(tmp_path: Path) -> None:
         n_detect=120,
         tol_arcsec=5.0,
         luma_weighted=False,
+        strength=1.0,  # full SPCC so the whole-frame diff is visible
     )
     # The fit must have applied some non-identity transform.
     diff = float(np.mean(np.abs(out - img)))

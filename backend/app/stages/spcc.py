@@ -462,6 +462,7 @@ def process(
     luma_weighted: bool = True,
     sky_percentile: float = 10.0,
     signal_percentile: float = 95.0,
+    strength: float = 0.5,
     **_unused: Any,
 ) -> np.ndarray:
     """Photometric colour calibration via cross-match to Gaia DR3.
@@ -586,7 +587,18 @@ def process(
 
     # --- apply ----------------------------------------------------------
     img_f32 = image.astype(np.float32, copy=False)
-    calibrated = img_f32 @ ccm.T.astype(np.float32)
+    # Dial the CCM back toward identity by `strength`. Siril's PCC
+    # does something analogous by normalising against a G2V solar
+    # reference rather than raw Gaia fluxes — the calibration shifts
+    # stay modest even when catalogue stars span a wide colour range.
+    # We get the same effect by blending identity into the fitted
+    # matrix: `effective = I + strength * (ccm - I)`. Default 0.5
+    # was visually tuned against the three user samples (NGC 6888 /
+    # 2244 / 6960) so the sky isn't dominated by the R-boost SPCC
+    # would otherwise fit.
+    strength = float(np.clip(strength, 0.0, 1.0))
+    effective_ccm = np.eye(3, dtype=np.float64) + strength * (ccm - np.eye(3))
+    calibrated = img_f32 @ effective_ccm.T.astype(np.float32)
     calibrated = np.clip(calibrated, 0.0, 1.0)
     if not luma_weighted:
         return calibrated.astype(np.float32)
