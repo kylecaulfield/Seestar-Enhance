@@ -141,10 +141,122 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
   nebula profiles use HSV mode; galaxy/cluster profiles keep the
   default linear mode.
 - [ ] **Plate-solve + photometric color calibration (SPCC)** — the
-  single biggest color-accuracy upgrade available, but requires a
-  bundled star catalog (Gaia DR3 subset, ~200 MB) and an astrometric
-  solver. Defer until either (a) the catalog can be fetched on-demand,
-  or (b) we're okay breaking the "single-container offline" story.
+  single biggest color-accuracy upgrade available. Seestar FITS files
+  already embed the full astrometric solution (`CTYPE1/2`, `CRVAL1/2`,
+  `CRPIX1/2`, `CD1_1..CD2_2`, plus 2nd-order SIP distortion) so we
+  skip blind plate-solving entirely — no astrometry.net dependency,
+  no ~50 GB index files. Gaia DR3 photometry is CC0 so the catalog
+  can be bundled in the image.
+
+  **Phased plan — five phases at ≤ 6 hours of focused work each:**
+
+  - [ ] **Phase 1 — Gaia DR3 catalog bundle (~3-4 h)**
+    - Add `astroquery` + `pyarrow` to `backend/requirements.txt`.
+    - Write `backend/scripts/fetch_gaia.py`: ADQL query against
+      `https://gea.esac.esa.int/tap-server/tap`, filters to
+      `phot_g_mean_mag < 13` (~5M rows, ~30 MB as Parquet with
+      snappy compression).
+    - Columns: `ra`, `dec`, `phot_g_mean_mag`, `phot_bp_mean_mag`,
+      `phot_rp_mean_mag`. That's all SPCC needs.
+    - Save to `backend/app/data/gaia_bright.parquet` and commit the
+      file directly (< 50 MB is git-native territory).
+    - Update `Dockerfile` so the `data/` directory is copied into
+      the container (already in `app/` so it's likely already
+      happening via `COPY backend/ ./`).
+    - Write `backend/tests/test_catalog.py` that loads the Parquet
+      and asserts schema, row-count floor, magnitude range.
+    - Commit message: "Phase 1: bundle Gaia DR3 bright-star catalog"
+    - Exit criteria: one new file, one test passing, `pip install -r
+      requirements.txt` still works on a fresh container.
+
+  - [ ] **Phase 2 — WCS plumbing through the pipeline (~2-3 h)**
+    - Modify `stages/io_fits.py::load_fits()` to optionally return a
+      `WCS` object (add a sibling `load_fits_with_wcs()` that returns
+      `(image, wcs_or_none)`; keep the existing function as a
+      backwards-compat wrapper calling the new one and dropping the
+      WCS).
+    - Modify `pipeline.run()` to call the new variant and thread the
+      WCS into a new optional `spcc` stage that's wired but empty.
+    - Add a WCS-reading test against one of the Seestar samples
+      (verify a known RA/Dec round-trips through pixel coords).
+    - Commit message: "Phase 2: load and thread WCS through pipeline"
+    - Exit criteria: all existing tests still pass (77 + 1 new test
+      for WCS). No behavioural change to output.
+
+  - [ ] **Phase 3 — SPCC helper functions (~4-5 h)**
+    - New module `stages/spcc.py` with private helpers:
+      - `_detect_bright_stars(image, n=100) → ndarray[(N,2) int]` —
+        returns (y, x) of the N brightest local maxima above a MAD-
+        threshold, 7-px suppression window. (Adapt the code already
+        in `classify._metrics` — extract once, reuse.)
+      - `_catalog_in_fov(cat_df, wcs, margin_deg=0.2) → cat_df` —
+        filters the catalog to stars whose RA/Dec projects inside
+        the image (+margin). Uses `wcs.all_world2pix`.
+      - `_cross_match(img_stars_radec, cat_stars_df, tol_arcsec=2.0)
+        → (img_idx, cat_idx)` — nearest-neighbor in Dec-scaled flat
+        RA/Dec space via `scipy.spatial.cKDTree`. Rejects unmatched
+        stars.
+      - `_measure_star_rgb(image, stars, aperture_r=3) → ndarray[(M,3)]`
+        — aperture photometry on each detected star, median of pixels
+        inside `r` minus median of annulus outside.
+    - Unit tests for each helper with synthetic inputs (a fake 200x200
+      image, three hand-placed stars, a mock catalog DataFrame).
+    - Commit message: "Phase 3: SPCC star detection + cross-match"
+    - Exit criteria: tests pass, no pipeline wiring yet (helpers are
+      private, so they can change signature in phase 4).
+
+  - [ ] **Phase 4 — SPCC CCM fit and stage integration (~4-5 h)**
+    - In `stages/spcc.py`, add the public `process()`:
+      1. Read catalog from `app/data/gaia_bright.parquet`.
+      2. Run the helpers from phase 3.
+      3. For each matched pair, collect image-RGB and the Gaia
+         synthetic sRGB (computed from BP, RP, G via the Gaia/sRGB
+         transformation from DR3 documentation).
+      4. Solve `image_rgb @ M = target_rgb` via `np.linalg.lstsq`,
+         where `M` is the 3x3 CCM that best maps our sensor to sRGB.
+      5. Apply `image @ M.T`.
+      6. If fewer than `min_matches` pairs (default 20), log a warning
+         and return the image unchanged.
+    - Wire into `pipeline.run()` as an opt-in stage: profile sets
+      `"spcc": {...}` and the stage runs between background and the
+      heuristic WB in `color`. The static `SEESTAR_S50_CCM` in color
+      stays as the fallback when SPCC is disabled or fails.
+    - Profile update: add `"spcc": {"min_matches": 20}` to NEBULA_WIDE
+      and NEBULA_FILAMENT (the two most sensitive to colour accuracy).
+      Galaxy / cluster can enable in a later tuning pass.
+    - Synthetic end-to-end test: construct a fake image + WCS + CSV
+      catalog where the "true" CCM is identity; verify SPCC fits
+      identity within 1 %.
+    - Commit message: "Phase 4: SPCC CCM fit + pipeline wiring"
+    - Exit criteria: all tests pass, real sample run completes
+      without errors, SPCC logs the number of matched stars.
+
+  - [ ] **Phase 5 — Tuning + docs + close-out (~3-4 h)**
+    - Run all 6 samples end-to-end with SPCC on; compare to the
+      references the user supplied. Tune the nebula profiles:
+      typically the static CCM and `channel_gains` can be relaxed
+      once SPCC is doing the calibration work.
+    - If SPCC ever fails on the samples (low match count), investigate
+      and either adjust thresholds or gracefully fall back.
+    - Update `README.md` to document the SPCC opt-in and its data
+      dependency.
+    - Mark item 11 as shipped in this file with the commit hash.
+    - Commit message: "Phase 5: tune profiles with SPCC, close
+      reference-match section"
+    - Exit criteria: item 11 marked done, all tests pass, the "what
+      it buys us" items from the proposal are visible on at least
+      one of the samples.
+
+  **Total effort:** ~17-22 hours across the five phases, each sized
+  to comfortably fit a 6-hour session. Phases can be run on
+  consecutive sessions or stretched across days.
+
+  **Rollback:** each phase is independently revertable — phase 1
+  only adds a data file and a script, phase 2 only adds an optional
+  return value, phase 3 adds private helpers, phase 4 wires an
+  opt-in stage, phase 5 is profile tuning. Any phase can be held at
+  its commit boundary while the rest of the pipeline continues to
+  work.
 - [ ] **ML star removal (replace classical)** — StarNet/StarXTerminator-
   quality ML star removal would eliminate the "median steals galaxy
   core" problem and give much cleaner separation on dense starfields
