@@ -329,32 +329,65 @@ def _measure_star_rgb(
 # ---------- Gaia → target RGB + CCM fit -------------------------------------
 
 
+# Solar-reference (G2V) Gaia colour index. The Sun at the top of
+# Earth's atmosphere is the natural "neutral white" for broadband
+# photography — and that's the colour Siril's PCC uses as its
+# reference when deciding where the white point lands. Using a raw
+# flux-ratio target instead (our first implementation) makes even
+# a solar-type star look red-biased because Gaia RP is much wider
+# than a camera's R filter; the SPCC fit then compensates by
+# aggressively boosting R.
+_G2V_BP_RP = 0.82
+
+
 def _gaia_to_target_rgb(
     g_mag: np.ndarray,
     bp_mag: np.ndarray,
     rp_mag: np.ndarray,
+    solar_reference_bp_rp: float = _G2V_BP_RP,
+    color_amplitude: float = 0.08,
 ) -> np.ndarray:
     """Convert Gaia BP/G/RP magnitudes to per-star target RGB fluxes.
 
-    Each magnitude becomes a flux via `f = 10 ** (-0.4 * mag)`; we
-    take RP as the red-channel proxy, G as the green, BP as the blue.
-    Flux ratios (not absolute fluxes) are what SPCC fits against, so
-    we normalise each star's (R, G, B) row to sum to 1 before
-    returning — two stars of the same colour temperature at different
-    brightness land at the same normalised vector.
+    Rather than using raw Gaia flux ratios directly (which are
+    strongly R-biased because RP passband extends well into the near
+    IR), we build a target in which a star of solar colour
+    (`BP - RP ≈ 0.82`) lands neutral. A star's colour index offset
+    from solar, scaled by `color_amplitude`, shifts the target toward
+    red or blue. This matches Siril PCC's approach of using the Sun
+    as the photometric white reference.
+
+    Output rows are row-normalised to sum to 1 so only colour ratio
+    matters.
+
+    Parameters
+    ----------
+    g_mag, bp_mag, rp_mag : ndarray
+        Gaia DR3 mean magnitudes per star.
+    solar_reference_bp_rp : float
+        BP - RP for neutral (1/3, 1/3, 1/3). 0.82 is the G2V value.
+    color_amplitude : float
+        Slope of the target's R/B channels vs. (BP-RP). 0.08 keeps a
+        typical main-sequence range (BP-RP ∈ [-0.2, 2.0]) well inside
+        the physically-plausible colour gamut after normalisation.
 
     Returns
     -------
     np.ndarray
         Shape `(N, 3)` float64 array of normalised (R, G, B) target
-        values per star. Each row sums to 1.
+        values per star; each row sums to 1. A solar-colour star
+        returns `(1/3, 1/3, 1/3)` exactly.
     """
-    flux_r = np.power(10.0, -0.4 * np.asarray(rp_mag, dtype=np.float64))
-    flux_g = np.power(10.0, -0.4 * np.asarray(g_mag, dtype=np.float64))
-    flux_b = np.power(10.0, -0.4 * np.asarray(bp_mag, dtype=np.float64))
-    rgb = np.stack([flux_r, flux_g, flux_b], axis=1)
+    bp_rp = np.asarray(bp_mag, dtype=np.float64) - np.asarray(rp_mag, dtype=np.float64)
+    offset = (bp_rp - float(solar_reference_bp_rp)) * float(color_amplitude)
+    r = 1.0 / 3.0 + offset
+    g = np.full_like(r, 1.0 / 3.0)
+    b = 1.0 / 3.0 - offset
+    rgb = np.stack([r, g, b], axis=1)
+    # Clamp so badly-out-of-sequence BP-RP (very rare) can't produce
+    # negative weights in the target.
+    rgb = np.clip(rgb, 1e-3, None)
     totals = rgb.sum(axis=1, keepdims=True)
-    totals = np.where(totals > 0, totals, 1.0)
     return rgb / totals
 
 
@@ -415,6 +448,15 @@ def _fit_ccm(
         mean_g = float(np.mean(gains))
         if mean_g > 1e-6:
             gains = gains / mean_g
+        # Clamp per-channel gains to [0.85, 1.20]. Catalog stars are
+        # extincted (reddened) through Milky Way dust, and the fit
+        # reads that reddening as a sensor R-bias — it then over-
+        # corrects by boosting B. Clamping keeps calibration within
+        # the range that real camera miscalibrations actually fall in
+        # (~±20 %) and prevents a star sample dominated by reddened
+        # stars from pulling the whole diffuse emission into the
+        # opposite hue.
+        gains = np.clip(gains, 0.85, 1.20)
         return np.diag(gains).astype(np.float64)
 
     # Full 3×3 lstsq.

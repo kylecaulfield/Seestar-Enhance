@@ -198,13 +198,15 @@ NEBULA_WIDE: Profile = {
     # each other and the result swings way too blue.
     "color": {
         **NEBULA["color"],
-        "ccm": None,
+        # Keep the static Seestar S50 CCM as the sensor-bias baseline
+        # so the raw IR-leak / RGGB-green offsets are pre-compensated
+        # before SPCC refines on top. With SPCC now running in G2V-
+        # neutral mode and clamped to ±20 % gain, it acts as fine
+        # tuning rather than a competing calibration — layering the
+        # two gives the most stable colour across targets.
+        "ccm": "seestar_s50",
         "wb_strength": 0.0,
-        # SPCC already shifts chroma via the fitted gains; running a
-        # hard SCNR on top of that pushes green completely out and
-        # leaves R/B ratios skewed. Gentle SCNR is enough to tame
-        # residual Seestar green without fighting SPCC.
-        "green_clip": 0.15,
+        "green_clip": 0.25,
     },
     "stretch": {
         "black_percentile": 3.0,
@@ -232,7 +234,7 @@ NEBULA_WIDE: Profile = {
     # RP band is wider / extends further into the IR than a camera's
     # red filter. Dialling back lets us keep the SPCC star-match
     # direction without overcooking the result.
-    "spcc": {"min_matches": 20, "strength": 0.45},
+    "spcc": {"min_matches": 20, "strength": 0.85},
     # Wide nebulae don't benefit much from star split — the diffuse
     # signal is too embedded in the star field for median-based
     # separation to help cleanly — but the split also doesn't hurt,
@@ -251,7 +253,9 @@ NEBULA_FILAMENT: Profile = {
     # drop the static CCM, WB, and post-stretch channel_gains.
     "color": {
         **NEBULA["color"],
-        "ccm": None,
+        # Same rationale as NEBULA_WIDE — static Seestar CCM stays
+        # as baseline, SPCC fine-tunes on top.
+        "ccm": "seestar_s50",
         "wb_strength": 0.0,
         "green_clip": 0.3,
     },
@@ -279,7 +283,7 @@ NEBULA_FILAMENT: Profile = {
     # a slightly stronger SPCC application than nebula_wide. Still
     # dialled well back from 1.0 for the same Gaia-bands-vs-camera
     # mismatch reason explained in the NEBULA_WIDE profile above.
-    "spcc": {"min_matches": 20, "strength": 0.5},
+    "spcc": {"min_matches": 20, "strength": 0.85},
     # Smaller radius so the filament's ~5-8 px narrow structure isn't
     # caught by the median filter as a "star" — keeps it in the
     # starless layer where it can be stretched aggressively.
