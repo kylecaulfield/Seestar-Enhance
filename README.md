@@ -288,27 +288,89 @@ bundles live in `profiles.py`.
 
 ### Profiles & auto-classification
 
-`backend/app/profiles.py` exposes four named profiles:
+`backend/app/profiles.py` exposes six named profiles:
 
 - `default` — conservative settings that look acceptable on most targets.
 - `nebula` — stronger stretch, boosted saturation, heavier denoise +
-  chroma-blur for faint diffuse targets.
+  chroma-blur for faint diffuse targets (generic nebula).
+- `nebula_wide` — for wide diffuse emission that fills most of the
+  frame (Rosette, Crescent, North America). Gentler stretch, lighter
+  chroma blur to preserve internal dust-lane structure. Opts in to
+  **SPCC** when a Gaia catalog is bundled (see below).
+- `nebula_filament` — for narrow filament structures (Veil segments,
+  Bubble) that cover only a small fraction of the frame. Aggressive
+  sky crush and higher colour-index boost. Opts in to SPCC.
 - `galaxy` — moderate stretch, more sharpening, default saturation.
 - `cluster` — gentler stretch (preserves star colors), lighter denoise,
   minimal sharpening (avoids ringing on star PSFs).
 
 The web app and CLI pick one automatically when you don't specify
-`--profile`. `backend/app/stages/classify.py` computes three cheap
+`--profile`. `backend/app/stages/classify.py` computes four cheap
 metrics on the debayered image — median brightness of non-star pixels,
-star density per megapixel, and largest connected bright-region area —
-and applies hand-tuned thresholds to pick `nebula`, `galaxy`, or
-`cluster`. The classification and raw metrics are logged at INFO level
-and surfaced in the `/status` response so the UI can show which profile
-was selected.
+star density per megapixel, largest connected bright-region area, and
+the eccentricity of that region — and applies hand-tuned thresholds
+to pick a profile. The classification and raw metrics are logged at
+INFO level and surfaced in the `/status` response so the UI can show
+which profile was selected.
 
 Add your own profile by appending to `PROFILES`. Each profile is a
 nested dict `{stage_name: {param: value}}`. Any stage parameter you omit
 falls back to the stage's built-in default.
+
+### Photometric Colour Calibration (SPCC)
+
+The nebula profiles (`nebula_wide`, `nebula_filament`) opt in to a
+**photometric colour calibration** stage that fits the sensor's colour
+response directly against known catalog-star photometry — the same
+technique as Siril's SPCC or PixInsight's SPCC. No per-sensor
+hand-tuning, no hidden assumptions: the calibration is driven by the
+actual pixels in the frame plus a bundled star catalog.
+
+**What SPCC needs:**
+
+1. **A plate-solved FITS.** Seestar firmware embeds full 2-D WCS
+   (`CTYPE/CRVAL/CRPIX/CD` plus 2nd-order SIP distortion) on every
+   frame, so there's nothing to do — the pipeline reads the solution
+   automatically. If the Seestar fails to plate-solve at capture
+   time and emits a FITS without WCS, SPCC logs a skip and the
+   fallback heuristic WB takes over.
+2. **The Gaia DR3 bright-star catalog** at
+   `backend/app/data/gaia_bright.parquet`. Not committed to the
+   repository by default; generate it with
+   ```sh
+   cd backend
+   python scripts/fetch_gaia.py
+   ```
+   The script tries the ESA Gaia archive first and falls back to the
+   CDS Vizier mirror. Default cutoff `G < 12` produces ~5 M rows /
+   ~30 MB; override with `GAIA_G_LIMIT=13` for a more generous cut.
+   Gaia DR3 photometry is CC0 — safe to bundle in a downstream
+   Docker image.
+
+**How SPCC works here:** between `background` and `color`, the
+pipeline detects the brightest 200 stars in the image, projects them
+to RA/Dec via the WCS, cross-matches to the Gaia catalog (2″
+tolerance), measures aperture photometry per matched star, compares
+against Gaia BP/G/RP-derived target fluxes, and fits a diagonal 3×3
+colour-correction matrix (per-channel gain) that best aligns measured
+to target. Every early-out path logs why SPCC skipped (no WCS, no
+catalog, too few matches).
+
+**What it buys you:** objectively correct per-channel gains instead
+of the heuristic Mahalanobis-trimmed mid-tone match. When SPCC fires,
+the profile automatically drops its static Seestar CCM and its
+`channel_gains` overrides — they'd compound on top of SPCC and
+over-correct. Observed on the bundled samples (NGC 6888, NGC 2244,
+NGC 6960): the colour balance moves from neutral-cyan toward the
+Ha-red dominant look that manual PixInsight processing produces, with
+~58–191 Gaia stars matched per frame.
+
+**Mode:** `mode="diagonal"` (default, per-channel gain only) is the
+classical SPCC approach and is robust to the passband mismatch
+between Gaia BP/RP and typical consumer-camera blue/red filters.
+`mode="full"` fits an unconstrained 3×3 and can over-correct hue on
+broadband cameras; only use it when you trust the target photometry
+completely.
 
 ## CLI
 

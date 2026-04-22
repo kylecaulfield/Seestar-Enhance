@@ -140,13 +140,40 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
   scales only S, converts back. Hue-preserving by construction. All
   nebula profiles use HSV mode; galaxy/cluster profiles keep the
   default linear mode.
-- [ ] **Plate-solve + photometric color calibration (SPCC)** — the
-  single biggest color-accuracy upgrade available. Seestar FITS files
-  already embed the full astrometric solution (`CTYPE1/2`, `CRVAL1/2`,
-  `CRPIX1/2`, `CD1_1..CD2_2`, plus 2nd-order SIP distortion) so we
-  skip blind plate-solving entirely — no astrometry.net dependency,
-  no ~50 GB index files. Gaia DR3 photometry is CC0 so the catalog
-  can be bundled in the image.
+- [x] **Plate-solve + photometric color calibration (SPCC)** —
+  _Shipped across five phases on `claude/v2-start-spcc-phase-1-gaia-catalog`._
+  Key insight that made this tractable: Seestar FITS files already
+  embed the full astrometric solution, so we skip blind
+  plate-solving entirely. Gaia DR3 photometry is CC0 so the catalog
+  bundles directly. Hit-list:
+    - Phase 1 (`0ad96dc`): `scripts/fetch_gaia.py`, `astroquery` +
+      `pyarrow` deps, `app/data/__init__.py`, `test_catalog.py`.
+    - Phase 2 (`8e80b19`): `load_fits_with_wcs`, empty SPCC stage
+      wired into pipeline.
+    - Phase 3 (`6823871`): private helpers —
+      `_detect_bright_stars`, `_catalog_in_fov`, `_cross_match`,
+      `_measure_star_rgb`. 13 synthetic tests.
+    - Phase 4 (`e1968cc`): real `process()` with catalog load,
+      cross-match, `_gaia_to_target_rgb`, lstsq fit, apply.
+      Opt-in on `nebula_wide` + `nebula_filament`. 8 new tests.
+    - Phase 5 (this commit): tuned profiles to disable static CCM
+      and `channel_gains` when SPCC is active (they compound and
+      swing cyan); added `mode="diagonal"` default (classical SPCC,
+      robust to Gaia BP/RP vs camera RGB passband mismatch); Gaia
+      Parquet bundled via region-specific cone-search (32.7k stars
+      covering the six sample fields, 1 MB — full-sky can be
+      regenerated any time via `fetch_gaia.py`); README documents
+      the stage and data dependency.
+
+  **Observed on the samples:** diagonal SPCC fits per-channel gains
+  in the (R ~1.5, G ~0.7, B ~0.7-0.9) range across the four
+  nebula frames — boosting red, cutting green, consistent with the
+  Seestar S50's known sensor biases (RGGB green dominance + IR
+  leak in R). Outputs now land closer to the Ha-red hue of manual
+  PixInsight processing than the heuristic pipeline alone did.
+
+  The phased plan itself stays below, left in place as a record of
+  how the work was planned and where each phase landed.
 
   **Phased plan — five phases at ≤ 6 hours of focused work each:**
 
@@ -172,7 +199,7 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
       tests, data/ package + README). **Data file deferred** — see
       the follow-up item below.
 
-  - [ ] **Phase 1 follow-up — actually run `fetch_gaia.py` and commit
+  - [x] **Phase 1 follow-up — actually run `fetch_gaia.py` and commit
     the Parquet**. Not a full phase, ~30 min of work once the archive
     is cooperative:
     - Try `python backend/scripts/fetch_gaia.py` (defaults to G < 12,
@@ -189,7 +216,7 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
       HTTP 500 / timing out during the session. The archive
       welcome page explicitly warned it was unstable.
 
-  - [ ] **Phase 2 — WCS plumbing through the pipeline (~2-3 h)**
+  - [x] **Phase 2 — WCS plumbing through the pipeline (~2-3 h)**
     - Modify `stages/io_fits.py::load_fits()` to optionally return a
       `WCS` object (add a sibling `load_fits_with_wcs()` that returns
       `(image, wcs_or_none)`; keep the existing function as a
@@ -203,7 +230,7 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
     - Exit criteria: all existing tests still pass (77 + 1 new test
       for WCS). No behavioural change to output.
 
-  - [ ] **Phase 3 — SPCC helper functions (~4-5 h)**
+  - [x] **Phase 3 — SPCC helper functions (~4-5 h)**
     - New module `stages/spcc.py` with private helpers:
       - `_detect_bright_stars(image, n=100) → ndarray[(N,2) int]` —
         returns (y, x) of the N brightest local maxima above a MAD-
@@ -225,7 +252,7 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
     - Exit criteria: tests pass, no pipeline wiring yet (helpers are
       private, so they can change signature in phase 4).
 
-  - [ ] **Phase 4 — SPCC CCM fit and stage integration (~4-5 h)**
+  - [x] **Phase 4 — SPCC CCM fit and stage integration (~4-5 h)**
     - In `stages/spcc.py`, add the public `process()`:
       1. Read catalog from `app/data/gaia_bright.parquet`.
       2. Run the helpers from phase 3.
@@ -251,7 +278,7 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
     - Exit criteria: all tests pass, real sample run completes
       without errors, SPCC logs the number of matched stars.
 
-  - [ ] **Phase 5 — Tuning + docs + close-out (~3-4 h)**
+  - [x] **Phase 5 — Tuning + docs + close-out (~3-4 h)**
     - Run all 6 samples end-to-end with SPCC on; compare to the
       references the user supplied. Tune the nebula profiles:
       typically the static CCM and `channel_gains` can be relaxed

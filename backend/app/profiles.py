@@ -192,6 +192,16 @@ NEBULA: Profile = {
 # already red — less headroom before posterisation).
 NEBULA_WIDE: Profile = {
     **NEBULA,
+    # SPCC is doing the sensor calibration on this profile, so we
+    # turn OFF the static Seestar CCM and drop most of the heuristic
+    # WB. Leaving both active compounds three calibrations on top of
+    # each other and the result swings way too blue.
+    "color": {
+        **NEBULA["color"],
+        "ccm": None,
+        "wb_strength": 0.0,
+        "green_clip": 0.3,
+    },
     "stretch": {
         "black_percentile": 3.0,
         "white_percentile": 99.2,
@@ -204,17 +214,14 @@ NEBULA_WIDE: Profile = {
         "chroma_edge_aware": True,
         "chroma_edge_luma_sigma": 0.06,
     },
+    # Drop channel_gains here — SPCC's CCM already shifts the image
+    # toward the Gaia-derived colour balance, so a post-stretch gain
+    # layer would push too far.
     "curves": {
         "contrast": 0.65,
         "saturation": 1.25,
-        "channel_gains": (1.25, 0.95, 0.85),
+        "saturation_mode": "hsv",
     },
-    # SPCC opt-in (v2 phase 4). When the bundled Gaia catalog is
-    # present and the FITS has valid WCS, the stage fits a 3×3 CCM
-    # from matched stars and applies it between background and the
-    # heuristic colour stage. `min_matches=20` is conservative — a
-    # well-populated Seestar FOV has a few hundred Gaia stars bright
-    # enough for aperture photometry, so we have plenty of headroom.
     "spcc": {"min_matches": 20},
     # Wide nebulae don't benefit much from star split — the diffuse
     # signal is too embedded in the star field for median-based
@@ -230,6 +237,14 @@ NEBULA_WIDE: Profile = {
 # filament hard.
 NEBULA_FILAMENT: Profile = {
     **NEBULA,
+    # Same idea as NEBULA_WIDE — SPCC handles colour calibration, so
+    # drop the static CCM, WB, and post-stretch channel_gains.
+    "color": {
+        **NEBULA["color"],
+        "ccm": None,
+        "wb_strength": 0.0,
+        "green_clip": 0.5,
+    },
     "stretch": {
         "black_percentile": 15.0,
         "white_percentile": 99.2,
@@ -245,13 +260,8 @@ NEBULA_FILAMENT: Profile = {
     "curves": {
         "contrast": 1.0,
         "saturation": 1.3,
-        "channel_gains": (1.55, 0.95, 0.75),
+        "saturation_mode": "hsv",
     },
-    # SPCC opt-in (v2 phase 4). Filament frames have abundant
-    # field stars so the catalog cross-match easily hits the 20-star
-    # floor; calibrating the linear colour before the aggressive
-    # stretch below lets us drop the static `ccm="seestar_s50"` in a
-    # later tuning pass.
     "spcc": {"min_matches": 20},
     # Smaller radius so the filament's ~5-8 px narrow structure isn't
     # caught by the median filter as a "star" — keeps it in the

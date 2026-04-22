@@ -361,27 +361,24 @@ def _gaia_to_target_rgb(
 def _fit_ccm(
     measured_rgb: np.ndarray,
     target_rgb: np.ndarray,
+    mode: str = "diagonal",
 ) -> np.ndarray:
-    """Fit a 3×3 CCM: ``measured_rgb @ M.T ≈ target_rgb``.
+    """Fit a CCM: ``measured_rgb @ M.T ≈ target_rgb``.
 
-    Each star's (R, G, B) row is normalised to sum to 1 before the
-    fit, so the matrix only encodes colour balance — not overall
-    exposure. After the lstsq, we normalise each row of M so that
-    it sums to 1, which guarantees a white (luma-only) pixel stays
-    at its original brightness when the matrix is applied.
+    Two modes:
 
-    Parameters
-    ----------
-    measured_rgb : np.ndarray
-        `(N, 3)` per-star fluxes from aperture photometry.
-    target_rgb : np.ndarray
-        `(N, 3)` Gaia-derived targets (already row-normalised).
+    - ``"diagonal"`` (default, recommended): fits three per-channel
+      gains `g_R`, `g_G`, `g_B` that best map measured to target. The
+      result is a diagonal 3×3 matrix. Matches the classical
+      astronomy SPCC approach and is robust to the passband mismatch
+      between Gaia BP/RP and a camera's blue/red filters — a
+      full-3×3 fit would happily swing hue to "compensate" for that
+      mismatch and overshoot.
+    - ``"full"``: unconstrained 3×3 lstsq. Use when you trust the
+      targets completely (e.g. calibrated matched broadband photometry).
 
-    Returns
-    -------
-    np.ndarray
-        `(3, 3)` float64 matrix. Apply to an image via
-        ``img_out = img_in @ M.T``.
+    In both modes the result is row-sum-normalised so a white pixel
+    stays at its original brightness.
     """
     if measured_rgb.shape != target_rgb.shape:
         raise ValueError(
@@ -391,17 +388,38 @@ def _fit_ccm(
         raise ValueError(
             f"need at least 3 stars in an (N, 3) array; got {measured_rgb.shape}"
         )
+    if mode not in ("diagonal", "full"):
+        raise ValueError(f"mode must be 'diagonal' or 'full', got {mode!r}")
 
     totals = measured_rgb.sum(axis=1, keepdims=True)
     totals = np.where(totals > 0, totals, 1.0)
     m_norm = (measured_rgb / totals).astype(np.float64)
     t_norm = target_rgb.astype(np.float64)
 
-    # lstsq solves m_norm @ X ≈ t_norm for X of shape (3, 3).
-    # Our CCM applies as ``img @ M.T``, so M ≡ X.T.
+    if mode == "diagonal":
+        # Per-channel gain: choose g_c minimising Σ_i (g_c · m_i,c - t_i,c)²
+        # → g_c = Σ_i m_i,c · t_i,c / Σ_i m_i,c²  (ordinary least squares
+        # of a one-variable regression through the origin).
+        gains = np.zeros(3, dtype=np.float64)
+        for c in range(3):
+            denom = float(np.sum(m_norm[:, c] ** 2))
+            if denom < 1e-12:
+                gains[c] = 1.0
+            else:
+                gains[c] = float(np.sum(m_norm[:, c] * t_norm[:, c]) / denom)
+        # Diagonal gains *are* the white-balance change by design —
+        # row-sum-normalising would collapse them back to identity.
+        # Normalise by the mean gain instead so total luminance is
+        # preserved while the per-channel ratios (the actual
+        # calibration) are kept.
+        mean_g = float(np.mean(gains))
+        if mean_g > 1e-6:
+            gains = gains / mean_g
+        return np.diag(gains).astype(np.float64)
+
+    # Full 3×3 lstsq.
     x, _, _, _ = np.linalg.lstsq(m_norm, t_norm, rcond=None)
     m = x.T
-
     # Row-sum normalisation so white → white (preserves luma).
     row_sums = m.sum(axis=1, keepdims=True)
     row_sums = np.where(np.abs(row_sums) > 1e-6, row_sums, 1.0)
@@ -440,6 +458,7 @@ def process(
     aperture_r: int = 3,
     annulus_inner: int = 5,
     annulus_outer: int = 8,
+    mode: str = "diagonal",
     **_unused: Any,
 ) -> np.ndarray:
     """Photometric colour calibration via cross-match to Gaia DR3.
@@ -552,11 +571,14 @@ def process(
         cat_fov["phot_bp_mean_mag"][cat_idx[good]],
         cat_fov["phot_rp_mean_mag"][cat_idx[good]],
     )
-    ccm = _fit_ccm(measured, target)
+    ccm = _fit_ccm(measured, target, mode=mode)
+    # Log the diagonal (per-channel gain) even in full-matrix mode —
+    # that's the human-readable summary.
     logger.info(
-        "SPCC: fit CCM from %d matched stars; row sums %s",
+        "SPCC: fit %s CCM from %d matched stars; gains=[%.3f, %.3f, %.3f]",
+        mode,
         measured.shape[0],
-        np.round(ccm.sum(axis=1), 3).tolist(),
+        ccm[0, 0], ccm[1, 1], ccm[2, 2],
     )
 
     # --- apply ----------------------------------------------------------
