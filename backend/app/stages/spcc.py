@@ -344,7 +344,7 @@ def _gaia_to_target_rgb(
     g_mag: np.ndarray,
     bp_mag: np.ndarray,
     rp_mag: np.ndarray,
-    solar_reference_bp_rp: float = _G2V_BP_RP,
+    solar_reference_bp_rp: Optional[float] = _G2V_BP_RP,
     color_amplitude: float = 0.08,
 ) -> np.ndarray:
     """Convert Gaia BP/G/RP magnitudes to per-star target RGB fluxes.
@@ -379,7 +379,18 @@ def _gaia_to_target_rgb(
         returns `(1/3, 1/3, 1/3)` exactly.
     """
     bp_rp = np.asarray(bp_mag, dtype=np.float64) - np.asarray(rp_mag, dtype=np.float64)
-    offset = (bp_rp - float(solar_reference_bp_rp)) * float(color_amplitude)
+    # When `solar_reference_bp_rp=None`, use the per-frame median
+    # catalogue colour as the neutral reference. This auto-corrects
+    # for dust extinction along the line of sight: stars in the
+    # Milky Way disk are systematically reddened, so anchoring to
+    # the *median observed colour* (rather than an absolute solar
+    # value) keeps the calibration from over-bluing in dusty fields.
+    ref = (
+        float(np.median(bp_rp))
+        if solar_reference_bp_rp is None
+        else float(solar_reference_bp_rp)
+    )
+    offset = (bp_rp - ref) * float(color_amplitude)
     r = 1.0 / 3.0 + offset
     g = np.full_like(r, 1.0 / 3.0)
     b = 1.0 / 3.0 - offset
@@ -505,6 +516,8 @@ def process(
     sky_percentile: float = 10.0,
     signal_percentile: float = 95.0,
     strength: float = 0.5,
+    solar_reference_bp_rp: Optional[float] = _G2V_BP_RP,
+    color_amplitude: float = 0.08,
     **_unused: Any,
 ) -> np.ndarray:
     """Photometric colour calibration via cross-match to Gaia DR3.
@@ -616,6 +629,8 @@ def process(
         cat_fov["phot_g_mean_mag"][cat_idx[good]],
         cat_fov["phot_bp_mean_mag"][cat_idx[good]],
         cat_fov["phot_rp_mean_mag"][cat_idx[good]],
+        solar_reference_bp_rp=solar_reference_bp_rp,
+        color_amplitude=color_amplitude,
     )
     ccm = _fit_ccm(measured, target, mode=mode)
     # Log the diagonal (per-channel gain) even in full-matrix mode —
