@@ -64,6 +64,55 @@ def _chroma_smooth(image: np.ndarray, radius: float) -> np.ndarray:
     return np.clip(luma + smoothed, 0.0, 1.0).astype(np.float32)
 
 
+def _chroma_bilateral(
+    image: np.ndarray, radius: float, luma_sigma: float
+) -> np.ndarray:
+    """Edge-preserving chroma smooth: chroma gets smoothed strongly in
+    flat-luma regions and weakly (or not at all) across luma edges.
+
+    Naively computing local luma variance triggers the "edge" branch
+    everywhere on noisy sky (the noise is what creates the variance),
+    so we first smooth the luma at a large scale to get a stable
+    estimate of the "real" structure. Then we compute the LOCAL
+    gradient magnitude of that smoothed luma; only where this
+    gradient is large do we stop smoothing chroma.
+
+    Net effect: nebula-to-sky transitions (genuine large gradient)
+    keep their chroma separation; noisy flat sky / noisy flat nebula
+    (no large gradient at the smoothed scale) get the full chroma
+    smoothing and become locally neutral.
+    """
+    if radius <= 0:
+        return image
+    luma = image.mean(axis=-1, keepdims=True)
+    chroma = image - luma
+    l = luma[..., 0]
+
+    # 1. Smooth luma at a generous scale so noise doesn't masquerade
+    #    as an "edge". Scale ≈ the chroma-smoothing radius.
+    smoothed_l = gaussian_filter(l, sigma=float(radius))
+
+    # 2. Gradient magnitude on the smoothed luma.
+    gy, gx = np.gradient(smoothed_l)
+    grad_mag = np.sqrt(gy * gy + gx * gx).astype(np.float32)
+
+    # 3. Edge weight: 1 where the smoothed luma is flat, 0 at edges.
+    #    luma_sigma is the gradient magnitude at which we switch off
+    #    chroma smoothing; larger → more aggressive smoothing.
+    edge_w = np.exp(-(grad_mag / max(luma_sigma, 1e-6)) ** 2).astype(np.float32)
+    edge_w = edge_w[..., np.newaxis]
+
+    # 4. Gaussian-blur the chroma channels.
+    smoothed_chroma = np.empty_like(chroma)
+    for c in range(3):
+        smoothed_chroma[..., c] = gaussian_filter(chroma[..., c], sigma=float(radius))
+
+    # 5. Blend: flat-luma regions take the smoothed chroma, edges keep
+    #    the original.
+    out_chroma = smoothed_chroma * edge_w + chroma * (1.0 - edge_w)
+    return np.clip(luma + out_chroma, 0.0, 1.0).astype(np.float32)
+
+
 def _resize(image: np.ndarray, new_shape: tuple[int, int]) -> np.ndarray:
     """Lanczos resize an (H, W, 3) float32 image to (new_h, new_w, 3)."""
     new_h, new_w = new_shape
@@ -79,6 +128,8 @@ def process(
     strength: float = 1.0,
     chroma_blur: float = 0.0,
     downsample_factor: int = 1,
+    chroma_edge_aware: bool = False,
+    chroma_edge_luma_sigma: float = 0.05,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")
@@ -105,4 +156,6 @@ def process(
         low_freq_orig = _resize(small, (h, w))
         high_freq = img - low_freq_orig
         denoised = np.clip(low_freq + high_freq, 0.0, 1.0).astype(np.float32)
+    if chroma_edge_aware and chroma_blur > 0:
+        return _chroma_bilateral(denoised, chroma_blur, chroma_edge_luma_sigma)
     return _chroma_smooth(denoised, chroma_blur)

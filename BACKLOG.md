@@ -86,30 +86,31 @@ Specific items needed to close the visible gap between our output and
 the manually-processed references. Ordered by expected impact on the
 hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 
-- [ ] **Edge-preserving chroma denoise** — today's `chroma_blur` is an
-  isotropic Gaussian that smears nebula colour into the sky at
-  boundaries (visible as pink-tinted sky around the Rosette). Replace
-  with a bilateral filter (or luma-guided joint bilateral) so chroma
-  smoothing stops at luma edges. Expected: clean sky right up to the
-  nebula edge, no colour bleed.
-- [ ] **Hot-pixel / cosmic-ray rejection** — sigma-clipped stacking
-  removes these; single-frame processing can't. Detect pixels > N×MAD
-  brighter than their 3×3 neighbourhood and replace with median of
-  non-rejected neighbours. Runs pre-stretch so the bright outliers
-  don't get amplified into vivid rainbow dots.
-- [ ] **Star PSF deconvolution** — a couple of Richardson-Lucy iterations
-  with a synthetic Gaussian PSF tightens star cores before the stretch
-  so they don't bloom into visible halos. Target stars: fewer, sharper,
-  matching the reference's tight point-spread.
-- [ ] **Local contrast enhancement (CLAHE or multi-scale unsharp)** —
-  Rosette dust lanes and Veil filament edges benefit hugely from
-  local contrast boosting at ~50-200 px scales. Classical CLAHE on
-  luma would add this without any ML.
-- [ ] **Starless-only processing branches** — extend the star-split
-  pipeline so more stages run only on the starless layer: saturation
-  boost, channel_gains, CLAHE, and curves should all apply to starless
-  only. Stars then recombine via screen blend at their natural
-  (un-saturated, un-gain-shifted) brightness.
+- [x] **Edge-preserving chroma denoise** — _Shipped._ New
+  `chroma_edge_aware=True` option in `bm3d_denoise.process()` uses a
+  luma-gradient-weighted blend between smoothed and original chroma
+  so colour stops bleeding across nebula→sky edges. Nebula profile
+  uses it at `chroma_blur=120, chroma_edge_luma_sigma=0.08`.
+- [x] **Hot-pixel / cosmic-ray rejection** — _Shipped as
+  `stages/cosmetic.py`._ Pre-background median-filter outlier replace
+  with a MAD-based rejection threshold. Opt-in per profile; nebula
+  uses `neighborhood=3, sigma=6.0`.
+- [x] **Star PSF deconvolution** — _Shipped as `stages/deconv.py`._
+  Richardson-Lucy on luma with a synthetic Gaussian PSF. Classical,
+  opt-in per profile. Nebula profile currently has it OFF by default
+  — RL amplifies shot noise on faint-target stacks more than it helps;
+  the stage is available for galaxy profiles or cleaner data.
+- [x] **Local contrast enhancement (CLAHE)** — _Shipped as
+  `stages/clahe.py`._ Luma-only CLAHE with a user-controllable blend
+  into the original luma. Same rationale as deconv: on clean data
+  this lifts dust-lane / filament contrast; on noisy-sky stacks it
+  amplifies noise, so nebula profile has it OFF by default.
+- [x] **Starless-only processing branches** — _Shipped._ Pipeline now
+  runs `bm3d_denoise`, `sharpen`, `clahe`, and `curves` on the
+  starless layer when `stars` is set on the profile, then screen-
+  blends the unmodified stars back after `curves`. Stars never see
+  the saturation / channel_gains / CLAHE adjustments so they keep
+  their natural brightness and colour.
 - [ ] **Nebula profile sub-variants** — the current single nebula
   profile compromises between "wide diffuse" (Rosette) and "narrow
   filament" (Veil). Split into `nebula_wide` (less chroma_blur to keep

@@ -68,6 +68,10 @@ DEFAULT: Profile = {
 # nebulosity is the signal and shouldn't be fit away.
 NEBULA: Profile = {
     **DEFAULT,
+    # Cosmetic pre-pass strips hot pixels / cosmic-ray hits before the
+    # RBF background fit samples them; without it the arcsinh below
+    # amplifies each outlier into a vivid rainbow dot.
+    "cosmetic": {"neighborhood": 3, "sigma": 6.0},
     "background": {
         "grid": 32,
         "sigma": 2.0,
@@ -75,6 +79,10 @@ NEBULA: Profile = {
         "smoothing": 1.5,
         "downscale": 8,
     },
+    # Deconvolution is OFF for nebula by default. Richardson-Lucy
+    # amplifies shot noise and on faint-target stacks the amplified
+    # chroma noise outweighs the modest star-PSF tightening. The
+    # stage is wired and tested — galaxy profile can opt in.
     # SCNR the Seestar's RGGB green cast, but only partially: 0.7 is a
     # soft blend so OIII's green-cyan component survives. A hard clip
     # (0.9) over-suppresses OIII and turns the Veil purple instead of
@@ -136,8 +144,24 @@ NEBULA: Profile = {
     # moderate settings leave the frame speckled. strength=3 BM3D and
     # chroma_blur=100 together flatten the sky to near-neutral while
     # preserving nebula luma.
-    "bm3d_denoise": {"sigma": 0.25, "strength": 4.0, "chroma_blur": 200.0},
+    # Edge-preserving chroma smoothing: the isotropic 200-px Gaussian
+    # blurred the nebula's red into the surrounding sky (pink halo).
+    # `chroma_edge_aware=True` weights the chroma-average by local
+    # luma variance so smoothing stops at luma edges. `luma_sigma=0.05`
+    # is the tolerance for "similar luma" — pixels whose luma differs
+    # by more than that don't mix chroma.
+    "bm3d_denoise": {
+        "sigma": 0.25,
+        "strength": 4.0,
+        "chroma_blur": 120.0,
+        "chroma_edge_aware": True,
+        "chroma_edge_luma_sigma": 0.08,
+    },
     "sharpen": {"radius": 1.6, "amount": 0.25},
+    # CLAHE is OFF for nebula by default. On noisy-sky stacked data,
+    # local-tile histogram equalisation amplifies sky chroma noise
+    # more than it lifts nebula structure. Available for opt-in on
+    # cleaner galaxy data where the background noise floor is lower.
     # S-curve + moderate gains. The curve pushes sky toward zero, then
     # per-channel gains put R ahead of B for the Ha-dominant look. Gains
     # are moderate (1.25/0.95/0.80) so any residual R on the sky after

@@ -35,9 +35,12 @@ from app import profiles
 from app.stages import (
     background,
     bm3d_denoise,
+    clahe,
     classify,
     color,
+    cosmetic,
     curves,
+    deconv,
     export,
     sharpen,
     stars,
@@ -110,6 +113,13 @@ def run(
     params = profiles.get(selected)
     cb("classify", 1.0)
 
+    # Cosmetic: hot-pixel / cosmic-ray rejection. Pre-background so the
+    # fit samples aren't biased by single-pixel outliers. Opt-in.
+    cosmetic_params = params.get("cosmetic")
+    if cosmetic_params is not None:
+        log("[3a] cosmetic correction")
+        img = cosmetic.process(img, **cosmetic_params)
+
     log(f"[3/{len(_STAGES)}] background removal")
     cb("background", 0.0)
     img = background.process(img, **params.get("background", {}))
@@ -119,6 +129,14 @@ def run(
     cb("color", 0.0)
     img = color.process(img, **params.get("color", {}))
     cb("color", 1.0)
+
+    # Deconvolution: tighten star PSFs in linear space before the
+    # arcsinh stretch turns wide Gaussians into soft bright halos.
+    # Luma-only — chroma wouldn't benefit and could take artefacts.
+    deconv_params = params.get("deconv")
+    if deconv_params is not None:
+        log("[4a] star PSF deconvolution")
+        img = deconv.process(img, **deconv_params)
 
     log(f"[5/{len(_STAGES)}] stretch")
     cb("stretch", 0.0)
@@ -150,6 +168,14 @@ def run(
     cb("sharpen", 0.0)
     img = sharpen.process(img, **params.get("sharpen", {}))
     cb("sharpen", 1.0)
+
+    # CLAHE: local contrast on luma. When star_split is active this
+    # lands on the starless layer so stars don't get their cores
+    # crushed by local-tile equalisation. Opt-in per profile.
+    clahe_params = params.get("clahe")
+    if clahe_params is not None:
+        log("[7a] CLAHE local contrast")
+        img = clahe.process(img, **clahe_params)
 
     log(f"[8/{len(_STAGES)}] curves")
     cb("curves", 0.0)
