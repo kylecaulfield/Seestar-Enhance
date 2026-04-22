@@ -77,11 +77,14 @@ def test_metrics_keys() -> None:
         "non_star_median",
         "star_density_per_mpix",
         "largest_bright_fraction",
+        "largest_bright_elongation",
     }
 
 
 def test_classify_nebula_on_diffuse() -> None:
-    assert classify(_synthetic_nebula()) == "nebula"
+    # The synthetic nebula blob fills most of the frame, so it lands
+    # in the "wide" sub-variant (largest_bright_fraction > 0.20).
+    assert classify(_synthetic_nebula()) in ("nebula", "nebula_wide")
 
 
 def test_classify_cluster_on_dense_stars() -> None:

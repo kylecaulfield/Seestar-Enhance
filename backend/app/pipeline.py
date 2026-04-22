@@ -40,6 +40,7 @@ from app.stages import (
     color,
     cosmetic,
     curves,
+    dark_subtract,
     deconv,
     export,
     sharpen,
@@ -71,6 +72,7 @@ def run(
     profile: Optional[str] = None,
     verbose: bool = False,
     progress: Optional[ProgressCallback] = None,
+    dark: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Run the full v1 pipeline.
 
@@ -112,6 +114,14 @@ def run(
         log(f"using requested profile: {selected}")
     params = profiles.get(selected)
     cb("classify", 1.0)
+
+    # Dark-frame subtraction: first opportunity, before any processing.
+    # Caller supplies the master dark via `dark=`; profile can set
+    # `dark_scale` to tune it.
+    if dark is not None:
+        log("[2a] dark-frame subtraction")
+        dark_params = params.get("dark_subtract", {})
+        img = dark_subtract.process(img, dark=dark, **dark_params)
 
     # Cosmetic: hot-pixel / cosmic-ray rejection. Pre-background so the
     # fit samples aren't biased by single-pixel outliers. Opt-in.

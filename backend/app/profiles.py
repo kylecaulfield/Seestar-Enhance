@@ -116,6 +116,10 @@ NEBULA: Profile = {
         "pre_stretch_chroma_lowpass": 15.0,
         "mahalanobis_wb": False,
         "star_protect_percentile": 99.0,
+        # Seestar S50 CCM pre-compensates for the sensor's known
+        # IR leak into R and the RGGB green dominance. Applied before
+        # any WB heuristic so the WB has less work to do.
+        "ccm": "seestar_s50",
     },
     # Aggressive black point clips the mid-dark chroma speckle to pure
     # black; filaments survive above it. stretch is moderate because
@@ -166,18 +170,80 @@ NEBULA: Profile = {
     # per-channel gains put R ahead of B for the Ha-dominant look. Gains
     # are moderate (1.25/0.95/0.80) so any residual R on the sky after
     # the S-curve stays visually-neutral instead of tinting pink.
+    # saturation_mode="hsv": convert to HSV for the saturation scale.
+    # Hue-preserving — a nebula pixel stays at its original hue, just
+    # more saturated. Linear saturation (default) can shift hue on
+    # already-saturated pixels, which is visible on Ha-rich regions.
     "curves": {
         "contrast": 0.85,
         "saturation": 1.25,
         "channel_gains": (1.4, 0.95, 0.75),
+        "saturation_mode": "hsv",
     },
-    # v2: star/starless split. radius=7 (15 px window) removes the
-    # Seestar PSF stars cleanly while preserving Veil filaments (~10 px
-    # wide). With the split in place the main stretch no longer bloats
-    # every star — we get nebula-favourable stretch aggressiveness and
-    # stars stay point-like. Stars are recombined via screen blend after
-    # all processing, so they carry their natural colour into the final.
     "stars": {"radius": 7},
+}
+
+
+# nebula_wide — wide diffuse emission that fills most of the frame
+# (Rosette, Heart/Soul, North America). Key differences from the
+# generic NEBULA profile: lighter chroma_blur so internal dust-lane
+# structure survives, lower black_percentile since there's no "dark
+# sky" region to crush, slightly reduced R gain (the whole frame is
+# already red — less headroom before posterisation).
+NEBULA_WIDE: Profile = {
+    **NEBULA,
+    "stretch": {
+        "black_percentile": 3.0,
+        "white_percentile": 99.2,
+        "stretch": 22.0,
+    },
+    "bm3d_denoise": {
+        "sigma": 0.22,
+        "strength": 3.0,
+        "chroma_blur": 40.0,
+        "chroma_edge_aware": True,
+        "chroma_edge_luma_sigma": 0.06,
+    },
+    "curves": {
+        "contrast": 0.65,
+        "saturation": 1.25,
+        "channel_gains": (1.25, 0.95, 0.85),
+    },
+    # Wide nebulae don't benefit much from star split — the diffuse
+    # signal is too embedded in the star field for median-based
+    # separation to help cleanly — but the split also doesn't hurt,
+    # so we keep the same radius as the generic nebula profile.
+    "stars": {"radius": 7},
+}
+
+
+# nebula_filament — narrow filament structures (Veil segments, Bubble)
+# covering only a small fraction of the frame. Most pixels are sky,
+# so we can afford to crush the sky to pure black and push the
+# filament hard.
+NEBULA_FILAMENT: Profile = {
+    **NEBULA,
+    "stretch": {
+        "black_percentile": 15.0,
+        "white_percentile": 99.2,
+        "stretch": 28.0,
+    },
+    "bm3d_denoise": {
+        "sigma": 0.28,
+        "strength": 4.5,
+        "chroma_blur": 180.0,
+        "chroma_edge_aware": True,
+        "chroma_edge_luma_sigma": 0.10,
+    },
+    "curves": {
+        "contrast": 1.0,
+        "saturation": 1.3,
+        "channel_gains": (1.55, 0.95, 0.75),
+    },
+    # Smaller radius so the filament's ~5-8 px narrow structure isn't
+    # caught by the median filter as a "star" — keeps it in the
+    # starless layer where it can be stretched aggressively.
+    "stars": {"radius": 9},
 }
 
 
@@ -264,6 +330,8 @@ CLUSTER: Profile = {
 PROFILES: Dict[str, Profile] = {
     "default": DEFAULT,
     "nebula": NEBULA,
+    "nebula_wide": NEBULA_WIDE,
+    "nebula_filament": NEBULA_FILAMENT,
     "galaxy": GALAXY,
     "cluster": CLUSTER,
 }

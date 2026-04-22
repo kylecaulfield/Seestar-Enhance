@@ -32,13 +32,23 @@ from scipy.ndimage import binary_dilation, label, maximum_filter
 
 logger = logging.getLogger(__name__)
 
-Classification = Literal["nebula", "galaxy", "cluster"]
+Classification = Literal[
+    "nebula",
+    "nebula_wide",
+    "nebula_filament",
+    "galaxy",
+    "cluster",
+]
 
 
 class ClassifyMetrics(TypedDict):
     non_star_median: float
     star_density_per_mpix: float
     largest_bright_fraction: float
+    # Elongation of the largest connected bright region (0 = round,
+    # → 1 as aspect ratio grows). Separates narrow filaments (Veil)
+    # from round cluster cores / circular galaxy halos.
+    largest_bright_elongation: float
 
 
 # Empirically tuned on Seestar S50 single frames + stacks.
@@ -55,6 +65,10 @@ _CLUSTER_STAR_DENSITY = 1300.0
 _CLUSTER_MAX_SKY_MEDIAN = 0.03  # above this, diffuse emission is present
 _GALAXY_MIN_SKY_MEDIAN = 0.03   # galaxy halos lift median above "dark sky"
 _GALAXY_MAX_SKY_MEDIAN = 0.08   # but not as high as nebula diffuse median
+_FILAMENT_ELONGATION = 0.85     # elongation above which a bright region is
+                                # filamentary (Veil ≈ 0.9, M92 core ≈ 0.3).
+_WIDE_NEBULA_FRAC = 0.20        # largest-bright-fraction above which the
+                                # target is a wide diffuse nebula (Rosette).
 
 
 def _prestretch(luma: np.ndarray) -> np.ndarray:
@@ -107,19 +121,45 @@ def _metrics(image: np.ndarray) -> ClassifyMetrics:
     # inflated by the diffuse emission itself, so a MAD-scaled threshold
     # would perversely reject the very pixels we want to count.
     mod_mask = luma > _BRIGHT_THRESH
+    largest_frac = 0.0
+    elongation = 0.0
     if bool(mod_mask.any()):
-        lbl, _ = label(mod_mask)
+        lbl, num_labels = label(mod_mask)
         counts = np.bincount(lbl.ravel())
         counts[0] = 0  # background label
-        largest_px = int(counts.max()) if counts.size > 1 else 0
-    else:
-        largest_px = 0
-    largest_frac = largest_px / float(h * w)
+        if counts.size > 1 and int(counts.max()) > 0:
+            largest_label = int(counts.argmax())
+            largest_px = int(counts[largest_label])
+            largest_frac = largest_px / float(h * w)
+            # Elongation via second-moment eigenvalues of the largest
+            # connected region. Returns 0 for a circular blob and → 1
+            # as the aspect ratio grows; a 10:1 line would sit near 0.95.
+            ys, xs = np.nonzero(lbl == largest_label)
+            if ys.size >= 16:
+                y_c = ys.mean()
+                x_c = xs.mean()
+                dy = ys - y_c
+                dx = xs - x_c
+                cov = np.array(
+                    [[float((dy * dy).mean()), float((dy * dx).mean())],
+                     [float((dy * dx).mean()), float((dx * dx).mean())]],
+                    dtype=np.float64,
+                )
+                w_eig = np.linalg.eigvalsh(cov)
+                major = float(w_eig.max())
+                minor = float(w_eig.min())
+                if major > 1e-9:
+                    # axis ratio b/a from principal inertia axes;
+                    # elongation = sqrt(1 - (b/a)^2) maps a round blob
+                    # to 0 and an infinite line to 1.
+                    axis_ratio = np.sqrt(max(minor, 0.0) / major)
+                    elongation = float(np.sqrt(max(1.0 - axis_ratio * axis_ratio, 0.0)))
 
     return {
         "non_star_median": non_star_median,
         "star_density_per_mpix": star_density,
         "largest_bright_fraction": largest_frac,
+        "largest_bright_elongation": elongation,
     }
 
 
@@ -140,42 +180,53 @@ def classify(image: np.ndarray) -> Classification:
     """
     m = _metrics(image)
 
-    if m["largest_bright_fraction"] > _NEBULA_LARGEST_FRAC:
-        result: Classification = "nebula"
+    if m["largest_bright_fraction"] > _WIDE_NEBULA_FRAC:
+        # Very-large-connected-bright-region → wide diffuse nebula
+        # (Rosette fills ~80% of the frame; Heart/Soul nebulae similar).
+        # Handled by the nebula_wide profile which keeps chroma_blur
+        # moderate so dust lanes / internal structure survive.
+        result: Classification = "nebula_wide"
+    elif m["largest_bright_fraction"] > _NEBULA_LARGEST_FRAC:
+        # Medium-large bright region: a "normal" nebula with a mix
+        # of diffuse emission and sky. Default nebula profile.
+        result = "nebula"
     elif (
         m["star_density_per_mpix"] > _CLUSTER_STAR_DENSITY
         and m["non_star_median"] < _CLUSTER_MAX_SKY_MEDIAN
         and m["largest_bright_fraction"] > 0.005
+        and m["largest_bright_elongation"] < _FILAMENT_ELONGATION
     ):
-        # Dense stars AND dark sky AND a visible dense core region →
-        # globular cluster. The largest_bright_fraction gate is what
-        # separates a real cluster (M92 core fills ~1.3% of the frame)
-        # from a dense starfield overlaid on a faint nebula filament
-        # (NGC 6960 Western Veil has only ~0.3% bright fraction).
+        # Dense stars + dark sky + compact (non-elongated) bright core
+        # → globular cluster. Elongation gate ensures a filament-shaped
+        # bright region routes to nebula_filament instead of cluster.
         result = "cluster"
     elif _GALAXY_MIN_SKY_MEDIAN < m["non_star_median"] < _GALAXY_MAX_SKY_MEDIAN:
-        # Moderately elevated sky median without a dominant bright region:
-        # a galaxy with a halo (M81's halo lifts the median without
-        # producing the large connected region that Rosette/Veil do).
+        # Moderately elevated sky median: galaxy with halo (M81).
         result = "galaxy"
     elif m["non_star_median"] > _GALAXY_MAX_SKY_MEDIAN:
         # High sky median, no one-dominant region: a dim diffuse nebula
         # dispersed across the frame.
         result = "nebula"
-    elif m["star_density_per_mpix"] > _CLUSTER_STAR_DENSITY:
-        # Dark sky + dense stars but no visible cluster core: a faint
-        # nebula filament (Veil segments) through a dense starfield.
-        result = "nebula"
+    elif (
+        m["star_density_per_mpix"] > _CLUSTER_STAR_DENSITY
+        or m["largest_bright_elongation"] > _FILAMENT_ELONGATION
+    ):
+        # Dark sky + dense stars, or an elongated bright region — a
+        # filament-style nebula (Veil segments). nebula_filament
+        # profile uses a harder chroma_blur to crush sky to black
+        # since most of the frame is sky, not nebula.
+        result = "nebula_filament"
     else:
         # Dark sky, moderate stars → sparsely-framed galaxy.
         result = "galaxy"
 
     logger.info(
         "classify: %s (non_star_median=%.4f, star_density_per_mpix=%.1f, "
-        "largest_bright_fraction=%.4f)",
+        "largest_bright_fraction=%.4f, elongation=%.3f)",
         result,
         m["non_star_median"],
         m["star_density_per_mpix"],
         m["largest_bright_fraction"],
+        m["largest_bright_elongation"],
     )
     return result

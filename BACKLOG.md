@@ -111,33 +111,35 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
   blends the unmodified stars back after `curves`. Stars never see
   the saturation / channel_gains / CLAHE adjustments so they keep
   their natural brightness and colour.
-- [ ] **Nebula profile sub-variants** — the current single nebula
-  profile compromises between "wide diffuse" (Rosette) and "narrow
-  filament" (Veil). Split into `nebula_wide` (less chroma_blur to keep
-  dust lane contrast, less channel_gains) and `nebula_filament` (more
-  chroma_blur to crush sky, more Ha gain). Classifier: filament =
-  low largest_bright_fraction + narrow bright-region aspect ratio;
-  wide = high largest_bright_fraction.
-- [ ] **Filament/elongation metric in classifier** — currently NGC 6960
-  barely squeaks past the cluster gate because its bright region is
-  tiny. Measuring the aspect ratio (eccentricity) of the largest
-  connected bright region would separate narrow filaments from round
-  cluster cores at metric time, making classification deterministic
-  for narrow-filament nebulae.
-- [ ] **Sensor-specific color correction matrix** — Seestar's S50 has
-  a known IR leak in R and the dual-band LP filter has specific
-  transmission curves. A static 3×3 color correction matrix applied
-  before WB (like dcraw's `CameraCalibration`) gets the linear
-  channel balance into the right ballpark without heuristic tuning.
-- [ ] **Dark-frame subtraction (when provided)** — allow the caller to
-  supply a master dark (either through the CLI or a mount point on
-  the container) and subtract it pre-background. Seestar app already
-  does some calibration during stacking but raw dark-current patterns
-  survive at the noise floor.
-- [ ] **Hue-preserving saturation curve** — current saturation is a
-  linear scale around per-pixel luma; on very saturated nebula pixels
-  this can shift hue slightly. HSV or Lab-space saturation scaling
-  preserves hue exactly and is what astro software uses.
+- [x] **Nebula profile sub-variants** — _Shipped._ `nebula_wide`
+  (Rosette / Crescent-class: gentler stretch, lighter chroma_blur to
+  preserve internal dust lanes) and `nebula_filament` (Veil-class:
+  aggressive sky crush, larger chroma_blur, higher Ha gain). Classifier
+  routes on `largest_bright_fraction` and the elongation metric.
+- [x] **Filament/elongation metric in classifier** — _Shipped._ The
+  `largest_bright_elongation` metric (second-moment eigenvalue ratio
+  of the largest connected bright region) now drives the
+  filament-vs-cluster decision — 0 for round blobs, → 1 for narrow
+  lines. NGC 6960 (elong ≈ 0.28 because its bright region is the
+  star-field itself) routes to `nebula_filament` via the density-or-
+  elongation fallback; Veil cores with elongated filaments also land
+  there deterministically.
+- [x] **Sensor-specific color correction matrix** — _Shipped._
+  `color.process(..., ccm="seestar_s50")` applies a 3×3 linear
+  transform before the WB heuristics. The Seestar S50 CCM trims R
+  for the broadband-filter IR leak, trims G for the RGGB double-
+  green, and lifts B slightly. Accepts arbitrary user-supplied 3×3
+  matrices too. All nebula profiles enable it.
+- [x] **Dark-frame subtraction** — _Shipped as `stages/dark_subtract.py`
+  and as a `dark=` kwarg on `pipeline.run()`._ Caller supplies a
+  master-dark array; stage subtracts it pre-background with an
+  optional `scale`. No-op when `dark=None`, so existing flows are
+  unaffected.
+- [x] **Hue-preserving saturation curve** — _Shipped._ New
+  `saturation_mode="hsv"` in `curves.process()` converts to HSV,
+  scales only S, converts back. Hue-preserving by construction. All
+  nebula profiles use HSV mode; galaxy/cluster profiles keep the
+  default linear mode.
 - [ ] **Plate-solve + photometric color calibration (SPCC)** — the
   single biggest color-accuracy upgrade available, but requires a
   bundled star catalog (Gaia DR3 subset, ~200 MB) and an astrometric

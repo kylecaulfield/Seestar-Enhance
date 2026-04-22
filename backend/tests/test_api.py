@@ -57,7 +57,13 @@ def test_process_status_result_flow(synthetic_fits_bytes: bytes) -> None:
         status = client.get(f"/status/{job_id}").json()
         assert status["status"] == "done", status
         assert status["progress"] == 1.0
-        assert status["classification"] in ("nebula", "galaxy", "cluster")
+        assert status["classification"] in (
+            "nebula",
+            "nebula_wide",
+            "nebula_filament",
+            "galaxy",
+            "cluster",
+        )
 
         before = client.get(f"/preview/{job_id}/before")
         assert before.status_code == 200

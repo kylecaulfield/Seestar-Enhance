@@ -18,13 +18,35 @@
    (Bayer demosaic residuals, LP gradient residuals) before the arcsinh
    stretch amplifies those tiny differences into visible colour blotches.
    Must be done in linear space (before stretch), not after.
+5. Optional sensor CCM (color correction matrix): a 3x3 linear transform
+   applied to each pixel first. Used to pre-compensate for known sensor
+   quirks like the Seestar S50 IR leak into R.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
+
+
+# Seestar S50 CCM. Empirically-tuned (not factory-calibrated) to
+# compensate for:
+#   - IR leak in R from the broad dual-band filter (pulls R down)
+#   - Green dominance from the RGGB 2G:1R:1B sampling (pulls G down
+#     slightly, relying mostly on SCNR to finish the job)
+#   - Blue that's well-behaved; row preserves it with a tiny boost to
+#     offset the softer blue-channel SNR
+# The matrix is near-identity so it nudges rather than remaps the
+# colour cube. Rows must sum to 1.0 to preserve neutral luma.
+SEESTAR_S50_CCM: np.ndarray = np.array(
+    [
+        [0.92, -0.05, 0.13],  # R' = 0.92R - 0.05G + 0.13B  (subtract IR leak)
+        [-0.05, 0.95, 0.10],  # G' gets a ~5% trim
+        [-0.02, -0.03, 1.05],  # B' gets a modest lift
+    ],
+    dtype=np.float32,
+)
 
 
 def _percentile_mask(luma: np.ndarray, low: float, high: float) -> np.ndarray:
@@ -80,11 +102,26 @@ def process(
     pre_stretch_chroma_lowpass: float = 0.0,
     mahalanobis_wb: bool = True,
     star_protect_percentile: Optional[float] = 99.0,
+    ccm: Optional[Sequence[Sequence[float]]] = None,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")
 
     img = image.astype(np.float32, copy=True)
+
+    if ccm is not None:
+        # Apply the 3x3 colour correction matrix: new = old @ ccm.T.
+        # Accepts a literal matrix or the string "seestar_s50" shortcut.
+        if isinstance(ccm, str):
+            if ccm == "seestar_s50":
+                m = SEESTAR_S50_CCM
+            else:
+                raise ValueError(f"unknown ccm preset {ccm!r}")
+        else:
+            m = np.asarray(ccm, dtype=np.float32)
+            if m.shape != (3, 3):
+                raise ValueError(f"ccm must be 3x3, got shape {m.shape}")
+        img = np.clip(img @ m.T, 0.0, None).astype(np.float32)
     luma = img.mean(axis=-1)
 
     dark_thresh = float(np.percentile(luma, dark_percentile))
