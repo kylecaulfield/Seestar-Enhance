@@ -55,6 +55,18 @@ def _synthetic_cluster() -> np.ndarray:
     ys = rng.integers(0, img.shape[0], size=2000)
     xs = rng.integers(0, img.shape[1], size=2000)
     img[ys, xs, :] = 1.0
+    # Add a compact bright "core" region — the classifier requires a
+    # visible dense region, not just point stars, to disambiguate a
+    # real cluster from a faint-nebula filament in a dense starfield.
+    h, w = img.shape[:2]
+    yy, xx = np.meshgrid(
+        np.linspace(-1, 1, h, dtype=np.float32),
+        np.linspace(-1, 1, w, dtype=np.float32),
+        indexing="ij",
+    )
+    core = 0.9 * np.exp(-(xx**2 + yy**2) / 0.01)
+    for c in range(3):
+        img[..., c] = np.clip(img[..., c] + core, 0.0, 1.0)
     return img
 
 

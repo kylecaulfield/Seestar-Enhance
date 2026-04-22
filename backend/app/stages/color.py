@@ -77,6 +77,7 @@ def process(
     wb_strength: float = 1.0,
     green_clip: float = 0.0,
     pre_stretch_chroma_smooth: float = 0.0,
+    pre_stretch_chroma_lowpass: float = 0.0,
     mahalanobis_wb: bool = True,
     star_protect_percentile: Optional[float] = 99.0,
 ) -> np.ndarray:
@@ -172,5 +173,21 @@ def process(
         )
         # Remove only the slow colour variation; keep fast chroma intact.
         img = np.clip(img - slow_chroma, 0.0, None).astype(np.float32)
+
+    if pre_stretch_chroma_lowpass > 0.0:
+        # Low-pass on chroma: Gaussian-blur the per-channel deviation
+        # from luma, then reattach to the (unblurred) luma. Smooths the
+        # pixel-scale chroma noise that otherwise gets amplified to
+        # visible rainbow speckle by an aggressive arcsinh. Luma (stars,
+        # nebula edges) is untouched; features larger than sigma in the
+        # chroma (nebula color) are preserved.
+        luma3 = img.mean(axis=-1, keepdims=True)
+        chroma = img - luma3
+        sigma = float(pre_stretch_chroma_lowpass)
+        smoothed_chroma = np.stack(
+            [gaussian_filter(chroma[..., c], sigma=sigma) for c in range(3)],
+            axis=-1,
+        )
+        img = np.clip(luma3 + smoothed_chroma, 0.0, None).astype(np.float32)
 
     return np.clip(img, 0.0, 1.0).astype(np.float32)

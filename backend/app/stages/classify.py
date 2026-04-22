@@ -41,14 +41,20 @@ class ClassifyMetrics(TypedDict):
     largest_bright_fraction: float
 
 
-# Empirically tuned on the Seestar S50 samples at native resolution.
+# Empirically tuned on Seestar S50 single frames + stacks.
 # Nebula is picked first because a large extended region is the strongest
 # signal (veil-nebula largest_bright_fraction >> 0.1, galaxy/cluster are
 # below 0.03). Cluster falls out from high point-source density
-# (M92 ~1400/MP, M81 galaxy ~985/MP).
-_BRIGHT_THRESH = 0.10  # on pre-stretched luma
+# (M92 ~1400/MP, M81 galaxy ~985/MP) COMBINED with a dim sky — stacked
+# nebulae like NGC 6888 can have star densities up to ~2000/MP but
+# their non-star sky isn't dark, so we gate the cluster branch on
+# a dim sky threshold too.
+_BRIGHT_THRESH = 0.05  # on pre-stretched luma (lower = catches faint Ha)
 _NEBULA_LARGEST_FRAC = 0.10
-_CLUSTER_STAR_DENSITY = 1200.0
+_CLUSTER_STAR_DENSITY = 1300.0
+_CLUSTER_MAX_SKY_MEDIAN = 0.03  # above this, diffuse emission is present
+_GALAXY_MIN_SKY_MEDIAN = 0.03   # galaxy halos lift median above "dark sky"
+_GALAXY_MAX_SKY_MEDIAN = 0.08   # but not as high as nebula diffuse median
 
 
 def _prestretch(luma: np.ndarray) -> np.ndarray:
@@ -136,9 +142,32 @@ def classify(image: np.ndarray) -> Classification:
 
     if m["largest_bright_fraction"] > _NEBULA_LARGEST_FRAC:
         result: Classification = "nebula"
-    elif m["star_density_per_mpix"] > _CLUSTER_STAR_DENSITY:
+    elif (
+        m["star_density_per_mpix"] > _CLUSTER_STAR_DENSITY
+        and m["non_star_median"] < _CLUSTER_MAX_SKY_MEDIAN
+        and m["largest_bright_fraction"] > 0.005
+    ):
+        # Dense stars AND dark sky AND a visible dense core region →
+        # globular cluster. The largest_bright_fraction gate is what
+        # separates a real cluster (M92 core fills ~1.3% of the frame)
+        # from a dense starfield overlaid on a faint nebula filament
+        # (NGC 6960 Western Veil has only ~0.3% bright fraction).
         result = "cluster"
+    elif _GALAXY_MIN_SKY_MEDIAN < m["non_star_median"] < _GALAXY_MAX_SKY_MEDIAN:
+        # Moderately elevated sky median without a dominant bright region:
+        # a galaxy with a halo (M81's halo lifts the median without
+        # producing the large connected region that Rosette/Veil do).
+        result = "galaxy"
+    elif m["non_star_median"] > _GALAXY_MAX_SKY_MEDIAN:
+        # High sky median, no one-dominant region: a dim diffuse nebula
+        # dispersed across the frame.
+        result = "nebula"
+    elif m["star_density_per_mpix"] > _CLUSTER_STAR_DENSITY:
+        # Dark sky + dense stars but no visible cluster core: a faint
+        # nebula filament (Veil segments) through a dense starfield.
+        result = "nebula"
     else:
+        # Dark sky, moderate stars → sparsely-framed galaxy.
         result = "galaxy"
 
     logger.info(

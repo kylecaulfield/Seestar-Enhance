@@ -83,13 +83,31 @@ NEBULA: Profile = {
     # variation (LP residuals / Bayer blobs). The Veil's narrow filaments
     # are ~10 px wide so they fall well inside the high-pass band and
     # keep their colour; 200+ px sky blobs get flattened to neutral.
+    # pre_stretch_chroma_smooth=0 for nebula: a high-pass-chroma filter
+    # would flatten the very thing we want to see (Ha / OIII emission
+    # spanning most of the frame on wide targets like Rosette / Crescent /
+    # Veil).
+    # pre_stretch_chroma_lowpass=3.0 smooths pixel-scale chroma noise
+    # in linear space before the arcsinh stretch amplifies it into
+    # visible rainbow speckle. Nebula features are spatially much
+    # larger than 3px so their colour survives; pure per-pixel chroma
+    # variance is averaged down ~3x, saving ~3x amplification downstream.
+    # Mahalanobis WB rejects outliers in the RGB cloud, which for an
+    # emission nebula means the red Ha pixels get rejected as non-sky,
+    # and the sky-coloured pixels set the white point. Net effect: the
+    # nebula's natural red dominance gets washed out. Use plain per-
+    # channel medians for nebulae instead. Lower wb_strength so the
+    # residual red signal survives the channel normalisation.
     "color": {
         "dark_percentile": 25.0,
         "mid_low": 40.0,
         "mid_high": 80.0,
-        "wb_strength": 1.0,
-        "green_clip": 0.7,
-        "pre_stretch_chroma_smooth": 80.0,
+        "wb_strength": 0.6,
+        "green_clip": 0.85,
+        "pre_stretch_chroma_smooth": 0.0,
+        "pre_stretch_chroma_lowpass": 15.0,
+        "mahalanobis_wb": False,
+        "star_protect_percentile": 99.0,
     },
     # Aggressive black point clips the mid-dark chroma speckle to pure
     # black; filaments survive above it. stretch is moderate because
@@ -99,23 +117,36 @@ NEBULA: Profile = {
     # Aggressive stretch that would bloat stars in v1; the star-split
     # (below) separates stars from diffuse structure so this level of
     # arcsinh compression can lift faint filaments without halo ringing.
+    # Stack-friendly stretch: sky-crush via black, exclude stars via
+    # white, moderate arcsinh factor. The surviving noise band is
+    # dominated by chroma, addressed by the very-large chroma_blur below.
     "stretch": {
-        "black_percentile": 1.5,
-        "white_percentile": 99.95,
-        "stretch": 26.0,
+        "black_percentile": 8.0,
+        "white_percentile": 99.2,
+        "stretch": 24.0,
     },
-    # Heavy chroma_blur flattens remaining red/blue speckle in the
-    # mid-brightness diffuse region. BM3D sigma is fixed because the
-    # MAD estimator bleeds real nebula structure into its "noise".
-    # Sharpen stays gentle — we don't have star-removal and we don't
-    # want to re-amplify what we just denoised.
-    "bm3d_denoise": {"sigma": 0.15, "strength": 1.0, "chroma_blur": 10.0},
+    # chroma_blur=120 is extreme by luma-denoise standards but appropriate
+    # for Seestar stacked frames: the per-pixel chroma SNR is much worse
+    # than the luma SNR, and real nebula colour is always spatially
+    # smooth over hundreds of pixels. Sigma=120 averages the chroma
+    # across ~240-pixel neighbourhoods, leaving luma detail sharp and
+    # the nebula's Ha / OIII colour intact.
+    # Aggressive denoise + big chroma_blur: Seestar single-stack sky
+    # residuals produce enough chroma noise at our stretch levels that
+    # moderate settings leave the frame speckled. strength=3 BM3D and
+    # chroma_blur=100 together flatten the sky to near-neutral while
+    # preserving nebula luma.
+    "bm3d_denoise": {"sigma": 0.25, "strength": 4.0, "chroma_blur": 200.0},
     "sharpen": {"radius": 1.6, "amount": 0.25},
-    # Low contrast preserves gradient; moderate saturation because
-    # the starless layer already concentrates all the chroma — applying
-    # 1.35x saturation on a star-free, double-stretched nebula
-    # over-saturates the noise colour.
-    "curves": {"contrast": 0.30, "saturation": 1.35},
+    # S-curve + moderate gains. The curve pushes sky toward zero, then
+    # per-channel gains put R ahead of B for the Ha-dominant look. Gains
+    # are moderate (1.25/0.95/0.80) so any residual R on the sky after
+    # the S-curve stays visually-neutral instead of tinting pink.
+    "curves": {
+        "contrast": 0.85,
+        "saturation": 1.25,
+        "channel_gains": (1.4, 0.95, 0.75),
+    },
     # v2: star/starless split. radius=7 (15 px window) removes the
     # Seestar PSF stars cleanly while preserving Veil filaments (~10 px
     # wide). With the split in place the main stretch no longer bloats

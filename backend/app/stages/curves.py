@@ -7,10 +7,15 @@ defines a luma threshold above which the saturation gain is tapered
 back toward 1.0 — colored stars keep their hue without blowing out.
 Defaults are conservative so the extended-structure targets (galaxy
 halos, nebulae) still get the full boost.
+
+Optional `channel_gains` applies a per-channel multiplicative offset
+before the S-curve. Useful for emission-nebula targets where the sensor
+WB cannot recover the true Ha-dominant colour from a mostly-grey sky
+stack. Defaults to (1, 1, 1) — no change.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 
@@ -31,12 +36,28 @@ def process(
     contrast: float = 0.6,
     saturation: float = 1.2,
     star_preserve_percentile: Optional[float] = 99.0,
+    channel_gains: Optional[Sequence[float]] = None,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")
 
-    img = image.astype(np.float32, copy=False)
+    img = image.astype(np.float32, copy=True)
     img = _s_curve(np.clip(img, 0.0, 1.0), contrast)
+    # Apply channel_gains AFTER the S-curve, weighted by luma so dark
+    # pixels (sky) stay nearly unchanged while bright pixels (nebula,
+    # stars) get the full colour shift. Without the luma-weighting,
+    # multiplying a residual sky tint by 1.25R / 0.8B leaves a pink
+    # cast across the entire frame.
+    if channel_gains is not None:
+        if len(channel_gains) != 3:
+            raise ValueError(
+                f"channel_gains must have 3 values, got {len(channel_gains)}"
+            )
+        luma = img.mean(axis=-1, keepdims=True)  # (H, W, 1) in [0,1]
+        gains = np.asarray(channel_gains, dtype=np.float32)[None, None, :]
+        # effective gain = 1 + (gain - 1) * luma
+        effective = 1.0 + (gains - 1.0) * luma
+        img = np.clip(img * effective, 0.0, 1.0).astype(np.float32)
 
     luma = img.mean(axis=-1, keepdims=True)
     if star_preserve_percentile is not None and saturation != 1.0:
