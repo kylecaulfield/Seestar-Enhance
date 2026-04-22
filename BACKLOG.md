@@ -40,34 +40,117 @@ Legend: `[ ]` open, `[x]` done, `[~]` in progress or partially landed.
 
 ## Pipeline improvements
 
-- [ ] Star preservation in `curves`: current saturation boost can push
-  colored stars to clipping; clamp saturation near the top of the
-  histogram or apply it after a star mask.
-- [ ] Histogram-based auto-stretch knob that picks both black and
-  stretch-factor from the image, not just the black point.
-- [ ] `color`: replace mid-tone mean-matching with a more principled
-  white balance (e.g., median of Mahalanobis-trimmed sky pixels).
-- [ ] `background`: expose a "dark sky mask" pre-pass that can be
-  supplied by the caller instead of sigma-clipping from scratch.
-- [ ] Optional Lanczos downsample before BM3D for very large images;
-  upsample the noise estimate back. Halves runtime with minimal quality
-  loss on the Seestar sensor size.
-- [ ] Star-color protection step after `color`, so white-balance gains
-  don't desaturate known stellar temperatures.
-- [ ] Add a `crop.py` stage (simple rectangular crop), useful before
-  heavy stages to iterate faster on a region of interest.
+- [x] **Star preservation in `curves`** — _Shipped in `7ccb8d3`._
+  `star_preserve_percentile` ramps saturation back toward 1.0 for the
+  brightest ~1% of pixels so coloured stars keep their hue.
+- [x] **Histogram-based auto-stretch knob** — _Shipped in `7ccb8d3`._
+  `stretch.process(..., black_percentile="auto", stretch="auto")`
+  picks both from the image's luma histogram (MAD-based knee for
+  black, sky-to-target dynamic range for the arcsinh factor).
+- [x] **Principled WB (Mahalanobis-trimmed sky median)** — _Shipped in
+  `7ccb8d3`._ `mahalanobis_wb=True` in `color.process()` trims the sky
+  sample cloud by Mahalanobis distance so coloured outliers (stars,
+  nebula leakage) don't bias the channel balance.
+- [x] **Background dark-sky mask pre-pass** — _Shipped in `7ccb8d3`._
+  `background.process(..., sky_mask=bool_array)` drops grid samples
+  outside the caller-supplied mask.
+- [x] **Lanczos downsample before BM3D** — _Shipped in `7ccb8d3`._
+  `bm3d_denoise.process(..., downsample_factor=N)` denoises at 1/N
+  resolution and recovers high-frequency detail from the original;
+  ~4× speed-up at factor 2 with no visible loss.
+- [x] **Star-color protection in WB** — _Shipped in `7ccb8d3`._
+  `star_protect_percentile` in `color.process()` tapers the WB gain
+  toward 1.0 on the brightest pixels so red-M / blue-O types keep hue.
+- [x] **Crop stage** — _Shipped in `7ccb8d3`._ `stages/crop.py`
+  exposes `process(image, top, left, bottom, right)` with negative-
+  edge convention.
 - [x] **Luma-only sharpen** — _Shipped in `350db75`._ Per-channel unsharp
   was causing coloured fringing at demosaic edges; now the luma gets
   the high-pass and it's added equally across channels.
-- [x] **Pre-stretch chroma equalization** — _Shipped in `3829aca`._ High-
-  pass filter on per-channel chroma before arcsinh kills the residual
-  LP / Bayer color blobs that the stretch would otherwise amplify into
-  visible blue/red sky patches. Gated per-profile (galaxy=on at σ=20,
-  nebula=partial at σ=80, cluster=off).
+- [x] **Pre-stretch chroma equalization (high-pass + low-pass)** —
+  _Shipped in `3829aca` and extended in `4c6b8af`._ High-pass kills LP
+  / Bayer blobs before arcsinh; low-pass (new) averages pixel-scale
+  chroma noise before arcsinh amplifies it into rainbow speckle.
 - [x] **Per-channel black subtraction in stretch** — _Shipped in
   `3829aca`._ Each channel gets its own percentile floor removed before
-  the shared luma-derived normalization, equalising sky pedestals across
-  R/G/B so inter-channel offsets don't blow up post-arcsinh.
+  the shared luma-derived normalization.
+- [x] **Luma-weighted channel gains in curves** — _Shipped in `4c6b8af`._
+  Per-channel multiplicative boost applied post-S-curve and scaled by
+  luma so dark pixels (sky) get near-identity but bright pixels
+  (nebula) get the full colour shift. Used by nebula profile to
+  restore the Ha-dominant R:G:B ratio.
+
+## Reference-match improvements
+
+Specific items needed to close the visible gap between our output and
+the manually-processed references. Ordered by expected impact on the
+hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
+
+- [ ] **Edge-preserving chroma denoise** — today's `chroma_blur` is an
+  isotropic Gaussian that smears nebula colour into the sky at
+  boundaries (visible as pink-tinted sky around the Rosette). Replace
+  with a bilateral filter (or luma-guided joint bilateral) so chroma
+  smoothing stops at luma edges. Expected: clean sky right up to the
+  nebula edge, no colour bleed.
+- [ ] **Hot-pixel / cosmic-ray rejection** — sigma-clipped stacking
+  removes these; single-frame processing can't. Detect pixels > N×MAD
+  brighter than their 3×3 neighbourhood and replace with median of
+  non-rejected neighbours. Runs pre-stretch so the bright outliers
+  don't get amplified into vivid rainbow dots.
+- [ ] **Star PSF deconvolution** — a couple of Richardson-Lucy iterations
+  with a synthetic Gaussian PSF tightens star cores before the stretch
+  so they don't bloom into visible halos. Target stars: fewer, sharper,
+  matching the reference's tight point-spread.
+- [ ] **Local contrast enhancement (CLAHE or multi-scale unsharp)** —
+  Rosette dust lanes and Veil filament edges benefit hugely from
+  local contrast boosting at ~50-200 px scales. Classical CLAHE on
+  luma would add this without any ML.
+- [ ] **Starless-only processing branches** — extend the star-split
+  pipeline so more stages run only on the starless layer: saturation
+  boost, channel_gains, CLAHE, and curves should all apply to starless
+  only. Stars then recombine via screen blend at their natural
+  (un-saturated, un-gain-shifted) brightness.
+- [ ] **Nebula profile sub-variants** — the current single nebula
+  profile compromises between "wide diffuse" (Rosette) and "narrow
+  filament" (Veil). Split into `nebula_wide` (less chroma_blur to keep
+  dust lane contrast, less channel_gains) and `nebula_filament` (more
+  chroma_blur to crush sky, more Ha gain). Classifier: filament =
+  low largest_bright_fraction + narrow bright-region aspect ratio;
+  wide = high largest_bright_fraction.
+- [ ] **Filament/elongation metric in classifier** — currently NGC 6960
+  barely squeaks past the cluster gate because its bright region is
+  tiny. Measuring the aspect ratio (eccentricity) of the largest
+  connected bright region would separate narrow filaments from round
+  cluster cores at metric time, making classification deterministic
+  for narrow-filament nebulae.
+- [ ] **Sensor-specific color correction matrix** — Seestar's S50 has
+  a known IR leak in R and the dual-band LP filter has specific
+  transmission curves. A static 3×3 color correction matrix applied
+  before WB (like dcraw's `CameraCalibration`) gets the linear
+  channel balance into the right ballpark without heuristic tuning.
+- [ ] **Dark-frame subtraction (when provided)** — allow the caller to
+  supply a master dark (either through the CLI or a mount point on
+  the container) and subtract it pre-background. Seestar app already
+  does some calibration during stacking but raw dark-current patterns
+  survive at the noise floor.
+- [ ] **Hue-preserving saturation curve** — current saturation is a
+  linear scale around per-pixel luma; on very saturated nebula pixels
+  this can shift hue slightly. HSV or Lab-space saturation scaling
+  preserves hue exactly and is what astro software uses.
+- [ ] **Plate-solve + photometric color calibration (SPCC)** — the
+  single biggest color-accuracy upgrade available, but requires a
+  bundled star catalog (Gaia DR3 subset, ~200 MB) and an astrometric
+  solver. Defer until either (a) the catalog can be fetched on-demand,
+  or (b) we're okay breaking the "single-container offline" story.
+- [ ] **ML star removal (replace classical)** — StarNet/StarXTerminator-
+  quality ML star removal would eliminate the "median steals galaxy
+  core" problem and give much cleaner separation on dense starfields
+  (NGC 2244). Blocked on MIT-compatible weights — see ML stages
+  section. Classical median is a functional fallback today.
+- [ ] **ML denoise on starless** — NoiseXTerminator-class AI denoisers
+  clean residual chroma/luma noise dramatically better than BM3D at
+  the aggressive stretch levels emission nebulae need. Same blocker
+  as above; BM3D is the fallback.
 
 ## Profiles & UX
 
