@@ -138,20 +138,25 @@ def run(
     img = background.process(img, **params.get("background", {}))
     cb("background", 1.0)
 
+    # SPCC (v2) runs BETWEEN background and color: the background fit
+    # has already removed gradients (so the frame is flat enough for
+    # aperture photometry on stars), and we're still pre-WB so the
+    # fitted CCM describes the sensor's response directly — not the
+    # sensor composed with whatever heuristic gains color.process
+    # applies. When SPCC is enabled, profiles should lower
+    # `color.wb_strength` (or set it to 0) so the heuristic WB
+    # doesn't fight the catalogue fit.
+    spcc_params = params.get("spcc")
+    if spcc_params is not None and wcs is not None:
+        log("[3a] SPCC photometric calibration")
+        img = spcc.process(img, wcs=wcs, **spcc_params)
+    elif spcc_params is not None:
+        log("[3a] SPCC: skipped (no WCS in FITS header)")
+
     log(f"[4/{len(_STAGES)}] color neutralization + white balance")
     cb("color", 0.0)
     img = color.process(img, **params.get("color", {}))
     cb("color", 1.0)
-
-    # SPCC (v2): if the profile opts in AND we have a WCS from the
-    # FITS header, run photometric colour calibration against the
-    # bundled Gaia catalog. The stage itself is currently a no-op
-    # placeholder (phase 2); phases 3-4 of the SPCC plan implement
-    # star detection, cross-match, and the lstsq fit.
-    spcc_params = params.get("spcc")
-    if spcc_params is not None and wcs is not None:
-        log("[4a] SPCC photometric calibration")
-        img = spcc.process(img, wcs=wcs, **spcc_params)
 
     # Deconvolution: tighten star PSFs in linear space before the
     # arcsinh stretch turns wide Gaussians into soft bright halos.

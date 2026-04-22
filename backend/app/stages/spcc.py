@@ -10,21 +10,43 @@ This module lands in phases:
 
   Phase 2: module exists; `process()` is a no-op so the pipeline can
     be wired without committing to the final signature.
-  Phase 3 (this commit): private helpers — star detection, FOV filter,
-    cross-match, aperture photometry. Tested against synthetic data.
-  Phase 4: the actual lstsq fit in `process()`.
+  Phase 3: private helpers — star detection, FOV filter, cross-match,
+    aperture photometry. Tested against synthetic data.
+  Phase 4 (this commit): `process()` loads the catalog, runs the
+    helpers, fits a 3×3 CCM via `np.linalg.lstsq`, and applies it.
+    Falls back to a no-op (and a logged warning) when there aren't
+    enough matched stars for a stable fit.
 
-The helpers are module-private (leading underscore) so their exact
-signatures can still change before Phase 4 wires them up. Phase 4
-will expose the subset that `process()` uses.
+Gaia → target-RGB transform
+---------------------------
+We convert each matched star's Gaia magnitudes to a per-channel target
+flux ratio using the natural linear relationship
+
+    flux_c = 10 ** (-0.4 * mag_c)
+
+with `mag_R` ≡ `phot_rp_mean_mag`, `mag_G` ≡ `phot_g_mean_mag`,
+`mag_B` ≡ `phot_bp_mean_mag`. This is not a rigorous sRGB mapping —
+a fully correct SPCC would integrate Gaia BP/RP transmission against
+sRGB-primary response — but Gaia's bands are close enough to a
+typical broadband RGB camera that a direct magnitude-to-flux mapping
+captures the dominant colour-vs-temperature behaviour. The rest is
+absorbed by the free 3×3 matrix.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+import logging
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 from scipy.ndimage import maximum_filter
 from scipy.spatial import cKDTree
+
+from app.data import GAIA_PARQUET, gaia_catalog_exists
+
+logger = logging.getLogger(__name__)
+
+PathLike = Union[str, Path]
 
 
 # ---------- helpers ---------------------------------------------------------
@@ -304,21 +326,244 @@ def _measure_star_rgb(
     return out
 
 
+# ---------- Gaia → target RGB + CCM fit -------------------------------------
+
+
+def _gaia_to_target_rgb(
+    g_mag: np.ndarray,
+    bp_mag: np.ndarray,
+    rp_mag: np.ndarray,
+) -> np.ndarray:
+    """Convert Gaia BP/G/RP magnitudes to per-star target RGB fluxes.
+
+    Each magnitude becomes a flux via `f = 10 ** (-0.4 * mag)`; we
+    take RP as the red-channel proxy, G as the green, BP as the blue.
+    Flux ratios (not absolute fluxes) are what SPCC fits against, so
+    we normalise each star's (R, G, B) row to sum to 1 before
+    returning — two stars of the same colour temperature at different
+    brightness land at the same normalised vector.
+
+    Returns
+    -------
+    np.ndarray
+        Shape `(N, 3)` float64 array of normalised (R, G, B) target
+        values per star. Each row sums to 1.
+    """
+    flux_r = np.power(10.0, -0.4 * np.asarray(rp_mag, dtype=np.float64))
+    flux_g = np.power(10.0, -0.4 * np.asarray(g_mag, dtype=np.float64))
+    flux_b = np.power(10.0, -0.4 * np.asarray(bp_mag, dtype=np.float64))
+    rgb = np.stack([flux_r, flux_g, flux_b], axis=1)
+    totals = rgb.sum(axis=1, keepdims=True)
+    totals = np.where(totals > 0, totals, 1.0)
+    return rgb / totals
+
+
+def _fit_ccm(
+    measured_rgb: np.ndarray,
+    target_rgb: np.ndarray,
+) -> np.ndarray:
+    """Fit a 3×3 CCM: ``measured_rgb @ M.T ≈ target_rgb``.
+
+    Each star's (R, G, B) row is normalised to sum to 1 before the
+    fit, so the matrix only encodes colour balance — not overall
+    exposure. After the lstsq, we normalise each row of M so that
+    it sums to 1, which guarantees a white (luma-only) pixel stays
+    at its original brightness when the matrix is applied.
+
+    Parameters
+    ----------
+    measured_rgb : np.ndarray
+        `(N, 3)` per-star fluxes from aperture photometry.
+    target_rgb : np.ndarray
+        `(N, 3)` Gaia-derived targets (already row-normalised).
+
+    Returns
+    -------
+    np.ndarray
+        `(3, 3)` float64 matrix. Apply to an image via
+        ``img_out = img_in @ M.T``.
+    """
+    if measured_rgb.shape != target_rgb.shape:
+        raise ValueError(
+            f"shape mismatch: measured {measured_rgb.shape} vs target {target_rgb.shape}"
+        )
+    if measured_rgb.shape[0] < 3 or measured_rgb.shape[-1] != 3:
+        raise ValueError(
+            f"need at least 3 stars in an (N, 3) array; got {measured_rgb.shape}"
+        )
+
+    totals = measured_rgb.sum(axis=1, keepdims=True)
+    totals = np.where(totals > 0, totals, 1.0)
+    m_norm = (measured_rgb / totals).astype(np.float64)
+    t_norm = target_rgb.astype(np.float64)
+
+    # lstsq solves m_norm @ X ≈ t_norm for X of shape (3, 3).
+    # Our CCM applies as ``img @ M.T``, so M ≡ X.T.
+    x, _, _, _ = np.linalg.lstsq(m_norm, t_norm, rcond=None)
+    m = x.T
+
+    # Row-sum normalisation so white → white (preserves luma).
+    row_sums = m.sum(axis=1, keepdims=True)
+    row_sums = np.where(np.abs(row_sums) > 1e-6, row_sums, 1.0)
+    return (m / row_sums).astype(np.float64)
+
+
+def _load_catalog(path: PathLike) -> Dict[str, np.ndarray]:
+    """Load the bundled Gaia Parquet as a dict-of-ndarrays.
+
+    Uses pyarrow directly (no pandas). Returns the five columns SPCC
+    needs, with dtypes already normalised so downstream code doesn't
+    need to worry about float32-vs-float64 mixing.
+    """
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(str(path))
+    return {
+        "ra": np.asarray(table["ra"], dtype=np.float64),
+        "dec": np.asarray(table["dec"], dtype=np.float64),
+        "phot_g_mean_mag": np.asarray(table["phot_g_mean_mag"], dtype=np.float64),
+        "phot_bp_mean_mag": np.asarray(table["phot_bp_mean_mag"], dtype=np.float64),
+        "phot_rp_mean_mag": np.asarray(table["phot_rp_mean_mag"], dtype=np.float64),
+    }
+
+
 # ---------- public API -----------------------------------------------------
 
 
 def process(
     image: np.ndarray,
     wcs: Optional[Any] = None,
-    **kwargs: Any,
+    catalog_path: Optional[PathLike] = None,
+    min_matches: int = 20,
+    n_detect: int = 200,
+    tol_arcsec: float = 2.0,
+    aperture_r: int = 3,
+    annulus_inner: int = 5,
+    annulus_outer: int = 8,
+    **_unused: Any,
 ) -> np.ndarray:
-    """Apply photometric colour calibration.
+    """Photometric colour calibration via cross-match to Gaia DR3.
 
-    Phase 2 no-op: accepts the WCS + opt-in params so the pipeline
-    can be wired without committing to the final signature. Phase 4
-    replaces the body with the real fit.
+    Apply a 3×3 CCM learned from matched-star colour ratios. Returns
+    the input unchanged if:
+      - no WCS was supplied,
+      - the bundled catalog file is missing,
+      - fewer than `min_matches` stars cross-match inside tolerance.
+
+    Each early-out logs at WARNING / INFO so an operator can see why
+    SPCC didn't fire without digging through source.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Float32 RGB image of shape (H, W, 3) in [0, 1].
+    wcs : astropy.wcs.WCS | None
+        Parsed WCS from the FITS header.
+    catalog_path : str | Path | None
+        Path to the Gaia Parquet. Defaults to the bundled file under
+        `app/data/gaia_bright.parquet`.
+    min_matches : int
+        Minimum number of star pairs required for a stable fit.
+        Below this, SPCC logs and returns the image unchanged.
+    n_detect : int
+        How many of the brightest image stars to detect.
+    tol_arcsec : float
+        Cross-match tolerance.
+    aperture_r, annulus_inner, annulus_outer : int
+        Aperture-photometry radii.
+
+    Returns
+    -------
+    np.ndarray
+        Float32 RGB image of the same shape. Either colour-calibrated
+        via the fitted CCM, or the input unchanged on any early-out.
     """
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")
-    del wcs, kwargs  # consumed in phase 4
-    return image.astype(np.float32, copy=False)
+    if wcs is None:
+        logger.info("SPCC: no WCS supplied; skipping calibration")
+        return image.astype(np.float32, copy=False)
+
+    path = Path(catalog_path) if catalog_path is not None else GAIA_PARQUET
+    if not path.is_file():
+        logger.warning(
+            "SPCC: catalog not found at %s; run scripts/fetch_gaia.py to "
+            "populate, skipping calibration for now",
+            path,
+        )
+        return image.astype(np.float32, copy=False)
+
+    # --- star detection --------------------------------------------------
+    stars_yx = _detect_bright_stars(image, n=n_detect)
+    if stars_yx.shape[0] < min_matches:
+        logger.info(
+            "SPCC: detected %d stars (< min_matches=%d), skipping",
+            stars_yx.shape[0],
+            min_matches,
+        )
+        return image.astype(np.float32, copy=False)
+
+    # --- catalog filter + cross-match -----------------------------------
+    catalog = _load_catalog(path)
+    cat_fov = _catalog_in_fov(catalog, wcs, image_shape=image.shape[:2])
+    if cat_fov["ra"].size < min_matches:
+        logger.info(
+            "SPCC: only %d catalog stars in FOV (< %d), skipping",
+            cat_fov["ra"].size,
+            min_matches,
+        )
+        return image.astype(np.float32, copy=False)
+
+    # Project image-star pixel coords to RA/Dec for the KD-tree match.
+    pix = np.stack([stars_yx[:, 1], stars_yx[:, 0]], axis=1).astype(np.float64)  # (x, y)
+    img_radec = wcs.all_pix2world(pix, 0)  # (N, 2) [RA, Dec]
+    cat_radec = np.stack([cat_fov["ra"], cat_fov["dec"]], axis=1)
+    img_idx, cat_idx = _cross_match(img_radec, cat_radec, tol_arcsec=tol_arcsec)
+    if img_idx.size < min_matches:
+        logger.info(
+            "SPCC: only %d cross-matches (< %d), skipping",
+            img_idx.size,
+            min_matches,
+        )
+        return image.astype(np.float32, copy=False)
+
+    # --- photometry + fit -----------------------------------------------
+    matched_stars_yx = stars_yx[img_idx]
+    measured = _measure_star_rgb(
+        image,
+        matched_stars_yx,
+        aperture_r=aperture_r,
+        annulus_inner=annulus_inner,
+        annulus_outer=annulus_outer,
+    )
+    # Drop stars with near-zero measured flux in any channel — they
+    # contribute numerical noise and occasionally a singular fit.
+    good = measured.min(axis=1) > 1e-5
+    if int(good.sum()) < min_matches:
+        logger.info(
+            "SPCC: only %d usable matches after photometry (< %d), skipping",
+            int(good.sum()),
+            min_matches,
+        )
+        return image.astype(np.float32, copy=False)
+    measured = measured[good]
+    target = _gaia_to_target_rgb(
+        cat_fov["phot_g_mean_mag"][cat_idx[good]],
+        cat_fov["phot_bp_mean_mag"][cat_idx[good]],
+        cat_fov["phot_rp_mean_mag"][cat_idx[good]],
+    )
+    ccm = _fit_ccm(measured, target)
+    logger.info(
+        "SPCC: fit CCM from %d matched stars; row sums %s",
+        measured.shape[0],
+        np.round(ccm.sum(axis=1), 3).tolist(),
+    )
+
+    # --- apply ----------------------------------------------------------
+    out = image.astype(np.float32, copy=False) @ ccm.T.astype(np.float32)
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+def is_catalog_available() -> bool:
+    """Thin wrapper for callers that want a cheap existence check."""
+    return gaia_catalog_exists()

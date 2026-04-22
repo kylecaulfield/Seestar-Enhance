@@ -209,6 +209,13 @@ NEBULA_WIDE: Profile = {
         "saturation": 1.25,
         "channel_gains": (1.25, 0.95, 0.85),
     },
+    # SPCC opt-in (v2 phase 4). When the bundled Gaia catalog is
+    # present and the FITS has valid WCS, the stage fits a 3×3 CCM
+    # from matched stars and applies it between background and the
+    # heuristic colour stage. `min_matches=20` is conservative — a
+    # well-populated Seestar FOV has a few hundred Gaia stars bright
+    # enough for aperture photometry, so we have plenty of headroom.
+    "spcc": {"min_matches": 20},
     # Wide nebulae don't benefit much from star split — the diffuse
     # signal is too embedded in the star field for median-based
     # separation to help cleanly — but the split also doesn't hurt,
@@ -240,6 +247,12 @@ NEBULA_FILAMENT: Profile = {
         "saturation": 1.3,
         "channel_gains": (1.55, 0.95, 0.75),
     },
+    # SPCC opt-in (v2 phase 4). Filament frames have abundant
+    # field stars so the catalog cross-match easily hits the 20-star
+    # floor; calibrating the linear colour before the aggressive
+    # stretch below lets us drop the static `ccm="seestar_s50"` in a
+    # later tuning pass.
+    "spcc": {"min_matches": 20},
     # Smaller radius so the filament's ~5-8 px narrow structure isn't
     # caught by the median filter as a "star" — keeps it in the
     # starless layer where it can be stretched aggressively.
