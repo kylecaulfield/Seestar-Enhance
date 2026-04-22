@@ -3,15 +3,30 @@
 Loads raw Bayer-pattern FITS files produced by the ZWO Seestar telescope,
 detects the Bayer pattern from the header, debayers to RGB, and returns a
 float32 array normalized to [0, 1].
+
+Two entry points are exposed:
+
+    load_fits(path)            -> np.ndarray
+    load_fits_with_wcs(path)   -> (np.ndarray, astropy.wcs.WCS | None)
+
+`load_fits` stays around for existing callers that just want the pixels.
+`load_fits_with_wcs` returns the debayered image plus, when the FITS
+header carries a valid astrometric solution (Seestar firmware embeds
+CTYPE/CRVAL/CRPIX/CD plus SIP distortion coefficients in every file),
+a parsed `astropy.wcs.WCS` object that maps pixel ↔ RA/Dec. This is
+what v2 SPCC (phase 4) will use to project the Gaia catalog onto the
+image plane. When the header has no usable WCS, the second element is
+`None` and downstream code is expected to skip the SPCC branch.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 from PIL import Image
 from astropy.io import fits
+from astropy.wcs import WCS
 from colour_demosaicing import demosaicing_CFA_Bayer_Malvar2004
 
 PathLike = Union[str, Path]
@@ -130,52 +145,122 @@ def _to_float01(data: np.ndarray, header: fits.Header) -> np.ndarray:
     return np.clip(out, 0.0, 1.0)
 
 
-def load_fits(path: PathLike) -> np.ndarray:
-    """Load a Seestar FITS file and return a debayered RGB image.
+def _header_has_wcs(header: fits.Header) -> bool:
+    """True if the header carries a usable astrometric solution.
 
-    Parameters
-    ----------
-    path : str | Path
-        Path to a Seestar-produced FITS file containing a 2D Bayer mosaic.
-
-    Returns
-    -------
-    np.ndarray
-        Float32 array of shape (H, W, 3) with values in [0, 1].
+    We require at minimum CTYPE1 / CTYPE2 plus the reference-point
+    keywords (CRVAL1/2, CRPIX1/2). Seestar firmware writes all of
+    these on every frame; a missing CTYPE is the signal that the
+    plate-solve-at-capture step failed.
     """
+    required = ("CTYPE1", "CTYPE2", "CRVAL1", "CRVAL2", "CRPIX1", "CRPIX2")
+    return all(k in header for k in required)
+
+
+def _parse_wcs(header: fits.Header) -> Optional[WCS]:
+    """Construct an astropy WCS from the header if it looks valid.
+
+    Swallows the astropy parser's warnings/exceptions because a bad
+    WCS is not a reason to fail the whole load — v1 callers that
+    don't need the WCS should continue to work. When the parse fails
+    we return None and the caller is expected to fall back gracefully.
+    """
+    if not _header_has_wcs(header):
+        return None
+    # Seestar FITS carry NAXIS=3 (H, W, 3) when debayered, but the WCS
+    # itself only describes the 2 sky axes and has SIP distortion
+    # coefficients which WCSLIB refuses to mix with >2 dims. Pass
+    # `naxis=2` so astropy picks the sky projection and ignores the
+    # degenerate 3rd axis.
+    try:
+        wcs = WCS(header, naxis=2)
+    except Exception:  # noqa: BLE001 — astropy raises various types here
+        return None
+    # Degenerate WCS check: astropy returns a valid object for many
+    # malformed headers (all-zero CD / CDELT). Treat those as no-WCS
+    # rather than handing downstream code a projection that silently
+    # returns nonsense. Check CD first (astropy warns on cdelt access
+    # when both are present).
+    try:
+        if wcs.wcs.has_cd():
+            if not np.any(wcs.wcs.cd):
+                return None
+        else:
+            if not np.any(wcs.wcs.cdelt):
+                return None
+    except Exception:  # noqa: BLE001
+        return None
+    return wcs
+
+
+def _read_fits_hdu(path: PathLike) -> Tuple[np.ndarray, fits.Header]:
+    """Open the FITS file, pick the first HDU with image data, return
+    (data_array, header). Shared by `load_fits` and `load_fits_with_wcs`
+    so both entry points see identical pixels."""
     _validate_fits_header(path)
     with fits.open(str(path), memmap=False) as hdul:
         primary = hdul[0]
         data = primary.data
         header = primary.header
-
         if data is None:
             for hdu in hdul[1:]:
                 if hdu.data is not None:
                     data = hdu.data
                     header = hdu.header
                     break
-
     if data is None:
         raise ValueError(f"FITS file contains no image data: {path}")
+    return data, header
 
+
+def _data_to_rgb(data: np.ndarray, header: fits.Header) -> np.ndarray:
+    """Debayer / reshape the raw data array to (H, W, 3) float32 [0,1]."""
     if data.ndim == 3 and data.shape[0] in (3, 4):
         rgb = np.moveaxis(data[:3], 0, -1)
         return _to_float01(rgb, header)
-
     if data.ndim == 3 and data.shape[-1] in (3, 4):
         return _to_float01(data[..., :3], header)
-
     if data.ndim != 2:
         raise ValueError(
             f"Unsupported FITS data shape {data.shape}; expected 2D Bayer mosaic"
         )
-
     pattern = _detect_bayer_pattern(header)
     mono = _to_float01(data, header)
     rgb = demosaicing_CFA_Bayer_Malvar2004(mono, pattern=pattern)
-    rgb = np.clip(rgb, 0.0, 1.0).astype(np.float32, copy=False)
-    return rgb
+    return np.clip(rgb, 0.0, 1.0).astype(np.float32, copy=False)
+
+
+def load_fits(path: PathLike) -> np.ndarray:
+    """Load a Seestar FITS file and return a debayered RGB image.
+
+    Backwards-compat wrapper around `load_fits_with_wcs` that drops the
+    WCS. New callers should prefer the `_with_wcs` variant so SPCC can
+    calibrate colour against a star catalog.
+
+    Returns a float32 array of shape (H, W, 3) with values in [0, 1].
+    """
+    img, _ = load_fits_with_wcs(path)
+    return img
+
+
+def load_fits_with_wcs(
+    path: PathLike,
+) -> Tuple[np.ndarray, Optional[WCS]]:
+    """Load a Seestar FITS file and return `(image, wcs_or_none)`.
+
+    The image contract is the same as `load_fits`: float32 `(H, W, 3)`
+    in `[0, 1]`. The second element is an `astropy.wcs.WCS` instance
+    when the header carries a valid astrometric solution (Seestar
+    firmware writes one on every frame via its built-in plate solve),
+    or `None` when the solve failed at capture time.
+
+    Downstream code (SPCC) should treat a missing WCS as "skip
+    photometric calibration, fall back to heuristic WB".
+    """
+    data, header = _read_fits_hdu(path)
+    rgb = _data_to_rgb(data, header)
+    wcs = _parse_wcs(header)
+    return rgb, wcs
 
 
 def save_preview_png(arr: np.ndarray, path: PathLike) -> None:

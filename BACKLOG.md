@@ -150,7 +150,7 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 
   **Phased plan — five phases at ≤ 6 hours of focused work each:**
 
-  - [ ] **Phase 1 — Gaia DR3 catalog bundle (~3-4 h)**
+  - [~] **Phase 1 — Gaia DR3 catalog bundle (~3-4 h)**
     - Add `astroquery` + `pyarrow` to `backend/requirements.txt`.
     - Write `backend/scripts/fetch_gaia.py`: ADQL query against
       `https://gea.esac.esa.int/tap-server/tap`, filters to
@@ -168,6 +168,26 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
     - Commit message: "Phase 1: bundle Gaia DR3 bright-star catalog"
     - Exit criteria: one new file, one test passing, `pip install -r
       requirements.txt` still works on a fresh container.
+    - **Status (`0ad96dc`):** infrastructure landed (script, deps,
+      tests, data/ package + README). **Data file deferred** — see
+      the follow-up item below.
+
+  - [ ] **Phase 1 follow-up — actually run `fetch_gaia.py` and commit
+    the Parquet**. Not a full phase, ~30 min of work once the archive
+    is cooperative:
+    - Try `python backend/scripts/fetch_gaia.py` (defaults to G < 12,
+      auto-fallback ESA → Vizier). Expect ~30 MB output.
+    - If ESA is still 500-ing, set `GAIA_SOURCE=vizier` and wait
+      longer (Vizier is slow but doesn't 500).
+    - Commit the resulting `backend/app/data/gaia_bright.parquet`
+      with message "Phase 1 data: bundle Gaia DR3 bright-star
+      Parquet" and push. The 5 tests in `test_catalog.py` stop
+      being skipped the moment the file lands.
+    - Blocker when Phase 1 closed: both ESA Gaia TAP
+      (`gea.esac.esa.int/tap-server/tap`) and CDS Vizier
+      (`tapvizier.u-strasbg.fr/TAPVizieR/tap`) were returning
+      HTTP 500 / timing out during the session. The archive
+      welcome page explicitly warned it was unstable.
 
   - [ ] **Phase 2 — WCS plumbing through the pipeline (~2-3 h)**
     - Modify `stages/io_fits.py::load_fits()` to optionally return a

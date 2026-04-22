@@ -47,7 +47,8 @@ from app.stages import (
     stars,
     stretch,
 )
-from app.stages.io_fits import load_fits
+from app.stages.io_fits import load_fits_with_wcs
+from app.stages import spcc
 
 PathLike = Union[str, Path]
 ProgressCallback = Callable[[str, float], None]
@@ -101,7 +102,9 @@ def run(
 
     log(f"[1/{len(_STAGES)}] loading {input_fits}")
     cb("load", 0.0)
-    img = load_fits(input_fits)
+    img, wcs = load_fits_with_wcs(input_fits)
+    if wcs is not None:
+        log("  FITS includes valid WCS (SPCC-capable)")
     cb("load", 1.0)
 
     log(f"[2/{len(_STAGES)}] classify")
@@ -139,6 +142,16 @@ def run(
     cb("color", 0.0)
     img = color.process(img, **params.get("color", {}))
     cb("color", 1.0)
+
+    # SPCC (v2): if the profile opts in AND we have a WCS from the
+    # FITS header, run photometric colour calibration against the
+    # bundled Gaia catalog. The stage itself is currently a no-op
+    # placeholder (phase 2); phases 3-4 of the SPCC plan implement
+    # star detection, cross-match, and the lstsq fit.
+    spcc_params = params.get("spcc")
+    if spcc_params is not None and wcs is not None:
+        log("[4a] SPCC photometric calibration")
+        img = spcc.process(img, wcs=wcs, **spcc_params)
 
     # Deconvolution: tighten star PSFs in linear space before the
     # arcsinh stretch turns wide Gaussians into soft bright halos.
