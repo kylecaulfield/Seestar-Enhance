@@ -192,6 +192,9 @@ def test_spcc_fit_moves_pixels_under_miscalibration(tmp_path: Path) -> None:
     img, wcs, cat, _expected = _build_scene(
         tmp_path, n_stars=60, image_ccm=injected
     )
+    # Disable luma-weighting so the synthetic sky pixels (low luma) also
+    # get calibrated; luma_weighted=True is the right default for real
+    # astro frames but makes this whole-frame diff test insensitive.
     out = spcc.process(
         img,
         wcs=wcs,
@@ -199,6 +202,7 @@ def test_spcc_fit_moves_pixels_under_miscalibration(tmp_path: Path) -> None:
         min_matches=20,
         n_detect=120,
         tol_arcsec=5.0,
+        luma_weighted=False,
     )
     # The fit must have applied some non-identity transform.
     diff = float(np.mean(np.abs(out - img)))
@@ -261,3 +265,34 @@ def test_fit_ccm_rejects_bad_shapes() -> None:
         spcc._fit_ccm(np.zeros((2, 3)), np.zeros((2, 3)))
     with pytest.raises(ValueError):
         spcc._fit_ccm(np.zeros((10, 3)), np.zeros((10, 4)))
+
+
+def test_luma_weighted_spares_sky_pixels(tmp_path: Path) -> None:
+    """With `luma_weighted=True` (the default), dark pixels should
+    barely move — the CCM only applies in proportion to brightness.
+    With it off, every pixel gets hit equally and even the synthetic
+    "sky" noise shifts. This behaviour is what keeps SPCC from
+    tinting the real-image background red when it's fitting an
+    R-boost gain."""
+    injected = np.diag([0.7, 1.0, 1.3]).astype(np.float64)
+    img, wcs, cat, _ = _build_scene(tmp_path, n_stars=60, image_ccm=injected)
+
+    out_weighted = spcc.process(
+        img, wcs=wcs, catalog_path=cat,
+        min_matches=20, n_detect=120, tol_arcsec=5.0,
+        luma_weighted=True,
+    )
+    out_unweighted = spcc.process(
+        img, wcs=wcs, catalog_path=cat,
+        min_matches=20, n_detect=120, tol_arcsec=5.0,
+        luma_weighted=False,
+    )
+    # Sample the darkest pixels (bottom 10% luma): weighted version
+    # leaves them essentially unchanged; unweighted drags them with
+    # the CCM.
+    luma = img.mean(axis=-1)
+    sky_mask = luma < float(np.percentile(luma, 10.0))
+    w_shift = float(np.mean(np.abs(out_weighted[sky_mask] - img[sky_mask])))
+    u_shift = float(np.mean(np.abs(out_unweighted[sky_mask] - img[sky_mask])))
+    assert w_shift < u_shift
+    assert w_shift < 0.01  # dark pixels barely move

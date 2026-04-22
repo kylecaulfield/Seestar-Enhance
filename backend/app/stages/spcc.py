@@ -459,6 +459,9 @@ def process(
     annulus_inner: int = 5,
     annulus_outer: int = 8,
     mode: str = "diagonal",
+    luma_weighted: bool = True,
+    sky_percentile: float = 10.0,
+    signal_percentile: float = 95.0,
     **_unused: Any,
 ) -> np.ndarray:
     """Photometric colour calibration via cross-match to Gaia DR3.
@@ -582,8 +585,36 @@ def process(
     )
 
     # --- apply ----------------------------------------------------------
-    out = image.astype(np.float32, copy=False) @ ccm.T.astype(np.float32)
-    return np.clip(out, 0.0, 1.0).astype(np.float32)
+    img_f32 = image.astype(np.float32, copy=False)
+    calibrated = img_f32 @ ccm.T.astype(np.float32)
+    calibrated = np.clip(calibrated, 0.0, 1.0)
+    if not luma_weighted:
+        return calibrated.astype(np.float32)
+
+    # Luma-weighted blend: sky pixels (low luma) stay on the original
+    # (near-neutral) colour; star / nebula pixels (high luma) take the
+    # full calibrated result. Uses MAD-based thresholds rather than
+    # naive percentiles because some targets (e.g. wide-field nebulae
+    # filling most of the frame) have a luma histogram compressed into
+    # a very narrow band around the median — a percentile split would
+    # still give sky pixels non-negligible weight and tint them.
+    luma = img_f32.mean(axis=-1)
+    med = float(np.median(luma))
+    mad = float(np.median(np.abs(luma - med))) * 1.4826
+    if mad < 1e-6:
+        mad = 1e-6
+    # Sky = "median plus a few sigma of noise". Signal = whatever the
+    # bright percentile says (catches the genuinely-bright nebula and
+    # stars regardless of per-target MAD).
+    sky_level = med + 2.0 * mad
+    peak_level = float(np.percentile(luma, signal_percentile))
+    span = max(peak_level - sky_level, 1e-6)
+    # Squared ramp — the blend stays near zero through the sky
+    # shoulder and only ramps up on genuine signal.
+    weight = np.clip((luma - sky_level) / span, 0.0, 1.0) ** 2
+    weight = weight[..., np.newaxis]
+    blended = img_f32 * (1.0 - weight) + calibrated * weight
+    return np.clip(blended, 0.0, 1.0).astype(np.float32)
 
 
 def is_catalog_available() -> bool:
