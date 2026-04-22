@@ -208,7 +208,14 @@ NEBULA_WIDE: Profile = {
         "green_clip": 0.20,
     },
     "stretch": {
-        "black_percentile": 3.0,
+        # Hard sky crush — raised from 3 to 25 so the bottom quartile
+        # of luma maps to pure zero. Eliminates the residual sky tint
+        # the SPCC + chroma-blur pipeline was leaving even after the
+        # SCNR step. Faint nebula extends into the sky shoulder so a
+        # stiffer black point trims some outer halo, but for the
+        # wide-nebula targets (Rosette, Crescent) the bright structure
+        # still dominates.
+        "black_percentile": 25.0,
         "white_percentile": 99.2,
         "stretch": 22.0,
     },
@@ -223,8 +230,11 @@ NEBULA_WIDE: Profile = {
     # together already produce enough chroma for an emission nebula.
     # A positive saturation on top over-saturates the Ha-red regions
     # we're calibrating toward.
+    # Aggressive S-curve so anything still above the new black point
+    # but below the bright nebula gets squashed to near-black; only
+    # the actual emission survives.
     "curves": {
-        "contrast": 0.65,
+        "contrast": 0.95,
         "saturation": 1.0,
         "saturation_mode": "hsv",
     },
