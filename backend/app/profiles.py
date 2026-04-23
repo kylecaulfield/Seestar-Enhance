@@ -192,25 +192,34 @@ NEBULA: Profile = {
 # already red — less headroom before posterisation).
 NEBULA_WIDE: Profile = {
     **NEBULA,
-    # SPCC is doing the sensor calibration on this profile, so we
-    # turn OFF the static Seestar CCM and drop most of the heuristic
-    # WB. Leaving both active compounds three calibrations on top of
-    # each other and the result swings way too blue.
+    # Bicolor HOO target (Crescent NGC 6888): a Wolf-Rayet bubble with
+    # teal/cyan OIII in the centre and red/pink Hα on the outer shell.
+    # The Seestar RGGB bayer picks up OIII predominantly in the G
+    # channel with some B, and Hα almost entirely in R. To preserve
+    # the bicolor palette we need to keep G intact (no SCNR clipping)
+    # and boost saturation so the two emission bands read as distinct
+    # colours instead of a single pink blob.
     "color": {
         **NEBULA["color"],
         # Static CCM OFF — its built-in R-cut/B-boost was meant for the
         # pre-SPCC pipeline and was compounding with SPCC's own
-        # corrections (purple-cast result). With SPCC now running with
-        # the G2V solar reference and clamped gains, it can do the
-        # whole sensor calibration on its own.
+        # corrections (purple-cast result).
         "ccm": None,
         "wb_strength": 0.0,
-        "green_clip": 0.20,
+        # green_clip=0.0 disables SCNR entirely. The standard nebula
+        # profile clips G toward max(R,B) to tame sky green-bias, but
+        # that destroys the OIII signal on targets where G channel
+        # carries real nebula emission (HOO bicolor).
+        "green_clip": 0.0,
     },
+    # black_percentile=18 crushes the sky hard so the arc contrasts
+    # cleanly against black. stretch=28 + white_pct=99.97 lifts the
+    # arc well into the visible range so downstream luma-weighted
+    # channel_gains have meaningful bite on its pixels.
     "stretch": {
-        "black_percentile": 25.0,
-        "white_percentile": 99.95,
-        "stretch": 16.5,
+        "black_percentile": 18.0,
+        "white_percentile": 99.97,
+        "stretch": 28.0,
     },
     "bm3d_denoise": {
         "sigma": 0.22,
@@ -219,36 +228,43 @@ NEBULA_WIDE: Profile = {
         "chroma_edge_aware": True,
         "chroma_edge_luma_sigma": 0.06,
     },
-    # contrast=0.55 + white_pct=99.97 + stretch=15 keeps the Crescent
-    # arc as a thin coloured ring with visible inner structure instead
-    # of a blown-out solid pink blob. Saturation<1.0 desaturates the
-    # hot pink toward the reference's earthy pink-orange.
+    # contrast=0.70 pulls the arc firmly above the sky. saturation=1.5
+    # + HSV: the Crescent's short-exposure OIII signal is marginal (G
+    # only 27% over R raw), so bicolor teal won't read without much
+    # longer integration. Target a clean warm red-orange Hα arc
+    # matching the user's local reference (ref: R/G=1.23, hue ~20°).
+    #
+    # channel_gains (1.60, 1.25, 0.55): very strong R lift with G
+    # lifted to tilt hue toward orange (not pink) and B cut hard to
+    # remove the residual purple cast. Aggressive values are needed
+    # because gains are luma-weighted in the curves stage, so at the
+    # arc's ~0.3 luma the effective multiplier is much softer.
     "curves": {
-        "contrast": 0.60,
-        "saturation": 0.85,
+        "contrast": 0.70,
+        "saturation": 1.50,
         "saturation_mode": "hsv",
+        "channel_gains": (1.60, 1.25, 0.55),
     },
-    # strength=0.45 — apply 45% of SPCC's fitted gain. Full strength
-    # (1.0) on broadband Seestar data pushes R too hard because Gaia's
-    # RP band is wider / extends further into the IR than a camera's
-    # red filter. Dialling back lets us keep the SPCC star-match
-    # direction without overcooking the result.
+    # SPCC strength dialled back (0.7 -> 0.35) because SPCC calibrates
+    # against stellar references that assume broadband continuum. On
+    # an OIII-dominant bubble the G channel carries real emission
+    # that SPCC would read as "excess green sensor bias" and try to
+    # suppress, which would gut the teal tones.
     "spcc": {
         "min_matches": 20,
-        "strength": 0.7,
-        # `solar_reference_bp_rp=None` means "use the median catalogue
-        # star colour in this frame as the neutral reference". Auto-
-        # corrects for dust-extinction reddening — Milky Way stars are
-        # systematically reddened by intervening dust, and an absolute
-        # G2V reference reads that reddening as a sensor R-bias and
-        # over-corrects to blue.
+        "strength": 0.35,
         "solar_reference_bp_rp": None,
     },
-    # Wide nebulae don't benefit much from star split — the diffuse
-    # signal is too embedded in the star field for median-based
-    # separation to help cleanly — but the split also doesn't hurt,
-    # so we keep the same radius as the generic nebula profile.
-    "stars": {"radius": 7},
+    # Star-split DISABLED on this profile. The median-based star
+    # detector treats the Crescent's green OIII component of the arc
+    # as "star-like" (the arc has brightness comparable to nearby
+    # stars in a small exposure) and preferentially pulls G out of
+    # the starless channel. Tracing NGC 6888 showed R/G jumping from
+    # 1.11 pre-split to 2.15 post-split — that's what kills the arc's
+    # color and leaves it as a dim monochrome red blob. Keeping stars
+    # in the frame preserves the arc's intrinsic R≈G≈B ratio so the
+    # downstream saturation boost can pull out bicolor tones.
+    "stars": None,
 }
 
 
