@@ -297,13 +297,17 @@ NEBULA_FILAMENT: Profile = {
         "saturation": 1.0,
         "saturation_mode": "hsv",
     },
-    # strength=0.5 — filament profiles have cleaner sky so we tolerate
-    # a slightly stronger SPCC application than nebula_wide. Still
-    # dialled well back from 1.0 for the same Gaia-bands-vs-camera
-    # mismatch reason explained in the NEBULA_WIDE profile above.
+    # strength=0.25 — filament scenes are dominated by sparse
+    # starfield pixels, and SPCC's gains end up ±20 %-clamped on
+    # the B channel for every filament sample in our set (the fit
+    # wants to boost B further; clamping caps it). Applying even
+    # the clamped value at strength 0.7 still tinted the filament
+    # purple — the sparse real-signal pixels (the filament itself)
+    # were swamped by the sky's full-frame B-boost. 0.25 keeps a
+    # useful colour nudge without over-blueing the Veil.
     "spcc": {
         "min_matches": 20,
-        "strength": 0.7,
+        "strength": 0.25,
         # `solar_reference_bp_rp=None` means "use the median catalogue
         # star colour in this frame as the neutral reference". Auto-
         # corrects for dust-extinction reddening — Milky Way stars are
@@ -339,11 +343,24 @@ NEBULA_DOMINANT: Profile = {
     **NEBULA,
     "color": {
         **NEBULA["color"],
-        # Re-enable the static Seestar CCM: it's the sensor-calibration
-        # baseline for frames where SPCC can't help.
-        "ccm": "seestar_s50",
-        "wb_strength": 0.4,
-        "green_clip": 0.6,
+        # CCM OFF: the static Seestar CCM trims R and lifts B to
+        # correct for the sensor's IR leak, but on an Ha-dominated
+        # frame that trims the actual emission.
+        #
+        # WB OFF (wb_strength=0.0): the mid-tone-median WB band on
+        # this target is ~80% nebula, so WB tries to flatten the Ha
+        # emission into "neutral" grey — exactly backwards of what
+        # we want. Leaving WB off keeps the raw per-channel balance
+        # (R slightly above G above B), which the channel_gains
+        # below amplify into proper Ha dominance.
+        #
+        # SCNR at moderate strength (0.4): the Seestar's RGGB green
+        # dominance still needs attention — we just don't want SCNR
+        # to clip G all the way down to (R+B)/2 (would leave a
+        # pink-violet cast).
+        "ccm": None,
+        "wb_strength": 0.0,
+        "green_clip": 0.4,
     },
     # Generic NEBULA stretch — gentler than NEBULA_WIDE's black=25
     # crush, which would cut into the frame-filling emission.
@@ -365,10 +382,25 @@ NEBULA_DOMINANT: Profile = {
         "chroma_edge_aware": True,
         "chroma_edge_luma_sigma": 0.08,
     },
+    # Explicit channel_gains push R up and B down. Frame-filling
+    # emission nebulae are H-alpha-dominated, so after removing the
+    # static Seestar CCM (which was cutting R) and running the SCNR
+    # green_clip (which flattens R and B toward the same mid-tone)
+    # we land at pink. Boosting R / cutting B is the "this target
+    # is genuinely red" hint that SPCC would give us on a frame
+    # where it can run, but which we have no catalogue leverage
+    # for here.
     "curves": {
         "contrast": 0.7,
-        "saturation": 1.0,
+        "saturation": 1.10,
         "saturation_mode": "hsv",
+        # channel_gains tuned for Ha-dominant Rosette-class targets.
+        # Note: curves.channel_gains is luma-weighted so a dark pixel
+        # gets near-identity; a luma=0.5 pixel gets only half the
+        # named gain. The raw numbers below translate to ~1.5/0.95/
+        # 0.55 at mid-nebula luma, which is what puts the frame on
+        # the Ha-red axis rather than orange/gold.
+        "channel_gains": (2.00, 0.90, 0.10),
     },
     "stars": {"radius": 7},
     # No "spcc" key — SPCC stage is skipped for this profile.
