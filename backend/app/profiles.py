@@ -208,15 +208,9 @@ NEBULA_WIDE: Profile = {
         "green_clip": 0.20,
     },
     "stretch": {
-        # black_percentile=25 crushes the bottom quartile of luma to
-        # zero (sky goes dark). white_percentile=99.5 leaves just the
-        # actual stars at the upper end, with the Crescent arc sitting
-        # a notch below 1.0 — it reads as strongly coloured without
-        # clipping to white. stretch=20 balances dim-faint visibility
-        # against the risk of blowing the arc itself.
         "black_percentile": 25.0,
-        "white_percentile": 99.5,
-        "stretch": 20.0,
+        "white_percentile": 99.9,
+        "stretch": 18.0,
     },
     "bm3d_denoise": {
         "sigma": 0.22,
@@ -225,11 +219,12 @@ NEBULA_WIDE: Profile = {
         "chroma_edge_aware": True,
         "chroma_edge_luma_sigma": 0.06,
     },
-    # S-curve 0.80: middle ground between the 0.95 that was squashing
-    # the Crescent arc into clipped saturation and the 0.65 that made
-    # it barely visible at all.
+    # contrast=0.70: middle ground between 0.95 (blew the arc to
+    # white) and 0.55 (left it nearly invisible). Combined with
+    # white_percentile=99.9 in the stretch stage the arc keeps its
+    # colour gradient — strong red but not fully clipped.
     "curves": {
-        "contrast": 0.80,
+        "contrast": 0.70,
         "saturation": 1.0,
         "saturation_mode": "hsv",
     },
@@ -358,14 +353,15 @@ NEBULA_DOMINANT: Profile = {
         "green_clip": 0.4,
     },
     # Gentler than NEBULA_WIDE's black=25 crush (would eat the
-    # frame-filling emission) but not so gentle that the nebula
-    # disappears. white_percentile=99.6 keeps the brightest arcs
-    # below 1.0; stretch=20 lifts the mid-tone Rosette glow without
-    # blowing it.
+    # frame-filling emission). stretch=22 with white_percentile=99.85
+    # lifts the Rosette's faint mid-nebula luma into the visible range
+    # without pushing the brightest knots into clipped saturation.
+    # black_percentile=1.0 (vs default 2.0) pulls a little extra faint
+    # signal off the floor — helps the outer petals show up.
     "stretch": {
-        "black_percentile": 2.0,
-        "white_percentile": 99.6,
-        "stretch": 20.0,
+        "black_percentile": 1.0,
+        "white_percentile": 99.85,
+        "stretch": 22.0,
     },
     # Frame-filling nebulae have nothing identifiable as "sky" so
     # chroma noise can't be separated from the signal by sky
@@ -389,16 +385,14 @@ NEBULA_DOMINANT: Profile = {
     # where it can run, but which we have no catalogue leverage
     # for here.
     "curves": {
-        "contrast": 0.65,
-        "saturation": 1.10,
+        "contrast": 0.60,
+        "saturation": 1.0,
         "saturation_mode": "hsv",
-        # channel_gains (1.60, 0.95, 0.40) — the (1.40, 0.95, 0.50)
-        # variant left the nebula too dim for the hue to read
-        # clearly; the (2.00, 0.90, 0.10) was over-clipping bright
-        # arcs to white. This value lands between them: strong
-        # Ha-red bias, but the R channel's peak stays below 1.0 at
-        # typical mid-nebula luma.
-        "channel_gains": (1.60, 0.95, 0.40),
+        # channel_gains (1.40, 1.00, 0.55): slightly stronger R bias
+        # than the 1.35 / 0.60 middle-ground, paired with the boosted
+        # stretch to keep the Rosette visible in red without tipping
+        # back into the "blown-out orange" regime.
+        "channel_gains": (1.40, 1.00, 0.55),
     },
     "stars": {"radius": 7},
     # No "spcc" key — SPCC stage is skipped for this profile.
