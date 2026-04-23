@@ -209,8 +209,8 @@ NEBULA_WIDE: Profile = {
     },
     "stretch": {
         "black_percentile": 25.0,
-        "white_percentile": 99.9,
-        "stretch": 18.0,
+        "white_percentile": 99.95,
+        "stretch": 16.5,
     },
     "bm3d_denoise": {
         "sigma": 0.22,
@@ -219,13 +219,13 @@ NEBULA_WIDE: Profile = {
         "chroma_edge_aware": True,
         "chroma_edge_luma_sigma": 0.06,
     },
-    # contrast=0.70: middle ground between 0.95 (blew the arc to
-    # white) and 0.55 (left it nearly invisible). Combined with
-    # white_percentile=99.9 in the stretch stage the arc keeps its
-    # colour gradient — strong red but not fully clipped.
+    # contrast=0.55 + white_pct=99.97 + stretch=15 keeps the Crescent
+    # arc as a thin coloured ring with visible inner structure instead
+    # of a blown-out solid pink blob. Saturation<1.0 desaturates the
+    # hot pink toward the reference's earthy pink-orange.
     "curves": {
-        "contrast": 0.70,
-        "saturation": 1.0,
+        "contrast": 0.60,
+        "saturation": 0.85,
         "saturation_mode": "hsv",
     },
     # strength=0.45 — apply 45% of SPCC's fitted gain. Full strength
@@ -360,8 +360,8 @@ NEBULA_DOMINANT: Profile = {
     # signal off the floor — helps the outer petals show up.
     "stretch": {
         "black_percentile": 1.0,
-        "white_percentile": 99.85,
-        "stretch": 22.0,
+        "white_percentile": 99.80,
+        "stretch": 24.0,
     },
     # Frame-filling nebulae have nothing identifiable as "sky" so
     # chroma noise can't be separated from the signal by sky
@@ -386,13 +386,13 @@ NEBULA_DOMINANT: Profile = {
     # for here.
     "curves": {
         "contrast": 0.60,
-        "saturation": 1.0,
+        "saturation": 0.92,
         "saturation_mode": "hsv",
-        # channel_gains (1.40, 1.00, 0.55): slightly stronger R bias
-        # than the 1.35 / 0.60 middle-ground, paired with the boosted
-        # stretch to keep the Rosette visible in red without tipping
-        # back into the "blown-out orange" regime.
-        "channel_gains": (1.40, 1.00, 0.55),
+        # channel_gains (1.28, 1.02, 0.68): softer R-bias + slight G
+        # lift nudges the Rosette toward the reference's warm
+        # brown-red instead of vivid pink. saturation=0.92 pulls back
+        # the hot pink without stripping the dust-lane tonality.
+        "channel_gains": (1.28, 1.02, 0.68),
     },
     "stars": {"radius": 7},
     # No "spcc" key — SPCC stage is skipped for this profile.
