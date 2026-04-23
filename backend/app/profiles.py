@@ -208,16 +208,15 @@ NEBULA_WIDE: Profile = {
         "green_clip": 0.20,
     },
     "stretch": {
-        # Hard sky crush — raised from 3 to 25 so the bottom quartile
-        # of luma maps to pure zero. Eliminates the residual sky tint
-        # the SPCC + chroma-blur pipeline was leaving even after the
-        # SCNR step. Faint nebula extends into the sky shoulder so a
-        # stiffer black point trims some outer halo, but for the
-        # wide-nebula targets (Rosette, Crescent) the bright structure
-        # still dominates.
+        # black_percentile=25 crushes the bottom quartile of luma to
+        # zero (sky goes dark). white_percentile=99.5 leaves just the
+        # actual stars at the upper end, with the Crescent arc sitting
+        # a notch below 1.0 — it reads as strongly coloured without
+        # clipping to white. stretch=20 balances dim-faint visibility
+        # against the risk of blowing the arc itself.
         "black_percentile": 25.0,
-        "white_percentile": 99.2,
-        "stretch": 22.0,
+        "white_percentile": 99.5,
+        "stretch": 20.0,
     },
     "bm3d_denoise": {
         "sigma": 0.22,
@@ -226,15 +225,11 @@ NEBULA_WIDE: Profile = {
         "chroma_edge_aware": True,
         "chroma_edge_luma_sigma": 0.06,
     },
-    # Saturation 1.0 — SPCC's fitted gains plus the arcsinh stretch
-    # together already produce enough chroma for an emission nebula.
-    # A positive saturation on top over-saturates the Ha-red regions
-    # we're calibrating toward.
-    # Aggressive S-curve so anything still above the new black point
-    # but below the bright nebula gets squashed to near-black; only
-    # the actual emission survives.
+    # S-curve 0.80: middle ground between the 0.95 that was squashing
+    # the Crescent arc into clipped saturation and the 0.65 that made
+    # it barely visible at all.
     "curves": {
-        "contrast": 0.95,
+        "contrast": 0.80,
         "saturation": 1.0,
         "saturation_mode": "hsv",
     },
@@ -362,12 +357,15 @@ NEBULA_DOMINANT: Profile = {
         "wb_strength": 0.0,
         "green_clip": 0.4,
     },
-    # Generic NEBULA stretch — gentler than NEBULA_WIDE's black=25
-    # crush, which would cut into the frame-filling emission.
+    # Gentler than NEBULA_WIDE's black=25 crush (would eat the
+    # frame-filling emission) but not so gentle that the nebula
+    # disappears. white_percentile=99.6 keeps the brightest arcs
+    # below 1.0; stretch=20 lifts the mid-tone Rosette glow without
+    # blowing it.
     "stretch": {
         "black_percentile": 2.0,
-        "white_percentile": 99.2,
-        "stretch": 22.0,
+        "white_percentile": 99.6,
+        "stretch": 20.0,
     },
     # Frame-filling nebulae have nothing identifiable as "sky" so
     # chroma noise can't be separated from the signal by sky
@@ -391,16 +389,16 @@ NEBULA_DOMINANT: Profile = {
     # where it can run, but which we have no catalogue leverage
     # for here.
     "curves": {
-        "contrast": 0.7,
+        "contrast": 0.65,
         "saturation": 1.10,
         "saturation_mode": "hsv",
-        # channel_gains tuned for Ha-dominant Rosette-class targets.
-        # Note: curves.channel_gains is luma-weighted so a dark pixel
-        # gets near-identity; a luma=0.5 pixel gets only half the
-        # named gain. The raw numbers below translate to ~1.5/0.95/
-        # 0.55 at mid-nebula luma, which is what puts the frame on
-        # the Ha-red axis rather than orange/gold.
-        "channel_gains": (2.00, 0.90, 0.10),
+        # channel_gains (1.60, 0.95, 0.40) — the (1.40, 0.95, 0.50)
+        # variant left the nebula too dim for the hue to read
+        # clearly; the (2.00, 0.90, 0.10) was over-clipping bright
+        # arcs to white. This value lands between them: strong
+        # Ha-red bias, but the R channel's peak stays below 1.0 at
+        # typical mid-nebula luma.
+        "channel_gains": (1.60, 0.95, 0.40),
     },
     "stars": {"radius": 7},
     # No "spcc" key — SPCC stage is skipped for this profile.
