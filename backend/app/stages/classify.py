@@ -36,6 +36,7 @@ Classification = Literal[
     "nebula",
     "nebula_wide",
     "nebula_filament",
+    "nebula_dominant",
     "galaxy",
     "cluster",
 ]
@@ -65,6 +66,13 @@ _CLUSTER_STAR_DENSITY = 1300.0
 _CLUSTER_MAX_SKY_MEDIAN = 0.03  # above this, diffuse emission is present
 _GALAXY_MIN_SKY_MEDIAN = 0.03   # galaxy halos lift median above "dark sky"
 _GALAXY_MAX_SKY_MEDIAN = 0.08   # but not as high as nebula diffuse median
+# largest_bright_fraction above which the target fills most of the
+# frame (Rosette, Heart/Soul, etc.). SPCC can't help here because
+# every bright region is contaminated by nebula, and the sky-crush
+# used by nebula_wide would eat the actual emission. Route to the
+# `nebula_dominant` profile, which skips SPCC and runs the static
+# Seestar CCM as the sensor-bias baseline.
+_DOMINANT_NEBULA_FRAC = 0.60
 _FILAMENT_ELONGATION = 0.85     # elongation above which a bright region is
                                 # filamentary (Veil ≈ 0.9, M92 core ≈ 0.3).
 _WIDE_NEBULA_FRAC = 0.20        # largest-bright-fraction above which the
@@ -180,12 +188,19 @@ def classify(image: np.ndarray) -> Classification:
     """
     m = _metrics(image)
 
-    if m["largest_bright_fraction"] > _WIDE_NEBULA_FRAC:
-        # Very-large-connected-bright-region → wide diffuse nebula
-        # (Rosette fills ~80% of the frame; Heart/Soul nebulae similar).
-        # Handled by the nebula_wide profile which keeps chroma_blur
-        # moderate so dust lanes / internal structure survive.
-        result: Classification = "nebula_wide"
+    if m["largest_bright_fraction"] > _DOMINANT_NEBULA_FRAC:
+        # Nebula fills most of the frame (Rosette ~80 %, Heart/Soul
+        # similar). nebula_wide's black-crush would eat the outer
+        # halo because there's nothing identifiable as "sky" — and
+        # SPCC has no star-only region to calibrate from. The
+        # nebula_dominant profile keeps sensor correction via the
+        # static Seestar CCM and skips SPCC.
+        result: Classification = "nebula_dominant"
+    elif m["largest_bright_fraction"] > _WIDE_NEBULA_FRAC:
+        # Large-but-not-frame-filling bright region → wide diffuse
+        # nebula with some sky visible (Crescent-class). nebula_wide
+        # can use its sky-crush + SPCC approach here.
+        result = "nebula_wide"
     elif m["largest_bright_fraction"] > _NEBULA_LARGEST_FRAC:
         # Medium-large bright region: a "normal" nebula with a mix
         # of diffuse emission and sky. Default nebula profile.

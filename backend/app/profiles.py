@@ -319,6 +319,62 @@ NEBULA_FILAMENT: Profile = {
 }
 
 
+# nebula_dominant — emission nebula that fills almost the entire frame
+# (Rosette, Heart/Soul, sometimes North America / California). These
+# targets have no useful "sky" region for SPCC's star photometry to
+# calibrate against: every bright-region measurement is contaminated
+# by the nebula itself, and crushing the sky-shoulder eats the
+# diffuse outer emission. This profile therefore:
+#
+#   - runs the static Seestar S50 CCM (well-tuned to this sensor's
+#     biases already);
+#   - skips SPCC entirely — no `"spcc"` key, so the stage is a no-op;
+#   - keeps the generic NEBULA's sky-floor and stretch (black_pct
+#     modest, not the wide-nebula value of 25) so the nebula's outer
+#     halo survives;
+#   - keeps a moderate saturation so the natural Ha dominance shows.
+#
+# Classifier routes here when largest_bright_fraction > 0.6.
+NEBULA_DOMINANT: Profile = {
+    **NEBULA,
+    "color": {
+        **NEBULA["color"],
+        # Re-enable the static Seestar CCM: it's the sensor-calibration
+        # baseline for frames where SPCC can't help.
+        "ccm": "seestar_s50",
+        "wb_strength": 0.4,
+        "green_clip": 0.6,
+    },
+    # Generic NEBULA stretch — gentler than NEBULA_WIDE's black=25
+    # crush, which would cut into the frame-filling emission.
+    "stretch": {
+        "black_percentile": 2.0,
+        "white_percentile": 99.2,
+        "stretch": 22.0,
+    },
+    # Frame-filling nebulae have nothing identifiable as "sky" so
+    # chroma noise can't be separated from the signal by sky
+    # masking. Crush it with a large chroma_blur — the nebula's
+    # actual colour is spatially smooth over many hundreds of
+    # pixels, so a 150-px bilateral blur flattens the rainbow
+    # speckle without flattening real emission structure.
+    "bm3d_denoise": {
+        "sigma": 0.25,
+        "strength": 3.5,
+        "chroma_blur": 150.0,
+        "chroma_edge_aware": True,
+        "chroma_edge_luma_sigma": 0.08,
+    },
+    "curves": {
+        "contrast": 0.7,
+        "saturation": 1.0,
+        "saturation_mode": "hsv",
+    },
+    "stars": {"radius": 7},
+    # No "spcc" key — SPCC stage is skipped for this profile.
+}
+
+
 # Galaxies: bright core with a faint halo. A middle-ground stretch keeps
 # the core from clipping while lifting the disk. Slightly tighter sharpen
 # radius favors dust-lane detail over halo softness.
@@ -404,6 +460,7 @@ PROFILES: Dict[str, Profile] = {
     "nebula": NEBULA,
     "nebula_wide": NEBULA_WIDE,
     "nebula_filament": NEBULA_FILAMENT,
+    "nebula_dominant": NEBULA_DOMINANT,
     "galaxy": GALAXY,
     "cluster": CLUSTER,
 }

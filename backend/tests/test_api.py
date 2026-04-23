@@ -61,6 +61,7 @@ def test_process_status_result_flow(synthetic_fits_bytes: bytes) -> None:
             "nebula",
             "nebula_wide",
             "nebula_filament",
+            "nebula_dominant",
             "galaxy",
             "cluster",
         )
