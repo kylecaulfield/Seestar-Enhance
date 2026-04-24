@@ -27,9 +27,11 @@ Licensed under the [MIT License](LICENSE).
 - [Backend API](#backend-api)
 - [FITS format notes](#fits-format-notes)
 - [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
 - [Project structure in detail](#project-structure-in-detail)
+- [Writing a new stage](#writing-a-new-stage)
 - [v2 roadmap](#v2-roadmap)
-- [Bundled model licenses](#bundled-model-licenses)
+- [Bundled model licenses & weights policy](#bundled-model-licenses--weights-policy)
 - [Contributing](#contributing)
 - [References](#references)
 
@@ -241,16 +243,23 @@ a matter of editing `pipeline.py`.
 
 ### Stage reference
 
-| Order | Stage | Module | Summary |
-| --- | --- | --- | --- |
-| 1 | `io_fits` | `stages/io_fits.py` | Reads FITS, detects Bayer pattern, debayers, returns float32 RGB in `[0,1]`. |
-| 2 | `background` | `stages/background.py` | Removes sky gradients via a thin-plate-spline RBF fit on sigma-clipped grid samples, per channel. |
-| 3 | `color` | `stages/color.py` | Neutralizes dark-region tint, then equalizes mid-tone channel medians as a simple white balance. |
-| 4 | `stretch` | `stages/stretch.py` | Arcsinh stretch with an auto black-point at the 0.1st luminance percentile. |
-| 5 | `bm3d_denoise` | `stages/bm3d_denoise.py` | Block-Matching 3D denoise via the `bm3d` pip package. Sigma auto-estimated from the luminance Laplacian. |
-| 6 | `sharpen` | `stages/sharpen.py` | Gaussian unsharp mask with gentle defaults. |
-| 7 | `curves` | `stages/curves.py` | Tanh S-curve for contrast, luma-preserving saturation boost. |
-| 8 | `export` | `stages/export.py` | Writes a 16-bit RGB PNG via `pypng`. |
+| Order | Stage | Module | Summary | What the pixels look like after |
+| --- | --- | --- | --- | --- |
+| 1 | `io_fits` | `stages/io_fits.py` | Reads FITS, detects Bayer pattern, debayers, returns float32 RGB in `[0,1]`. | Full-resolution linear RGB. Looks almost black — Seestar raw has its entire signal in the bottom 2% of the value range. |
+| 2 | `background` | `stages/background.py` | Removes sky gradients via a thin-plate-spline RBF fit on sigma-clipped grid samples, per channel. | Still looks almost black, but gradients and light-pollution tint are gone — the frame is now flat. |
+| 3 | `color` / `spcc` | `stages/color.py` / `stages/spcc.py` | Heuristic WB (Mahalanobis-trimmed sky median + mid-tone channel match) plus sensor CCM. Opt-in `spcc` fits per-channel gains against Gaia catalog photometry. | Channel ratios are now physically meaningful. Still linear, still dim. |
+| 4 | `stretch` | `stages/stretch.py` | Per-channel black subtraction + arcsinh stretch with configurable black/white percentiles. | This is the "reveal" moment — nebulosity, galaxy halos, cluster members all appear at visible brightness for the first time. |
+| 5 | `stars` (opt-in) | `stages/stars.py` | Median-based split into `stars_only` + `starless` layers. Subsequent stages run on the starless layer; stars screen-blend back after `curves`. | Two layers. The starless one shows only extended structure (nebula, galaxy disk). |
+| 6 | `bm3d_denoise` | `stages/bm3d_denoise.py` | Block-Matching 3D denoise plus optional edge-aware chroma blur. Sigma auto-estimated from the luminance Laplacian. | Grain gone from sky/mid-tones; chroma noise smoothed without bleeding across nebula edges. |
+| 7 | `sharpen` | `stages/sharpen.py` | Luma-only unsharp mask (per-channel caused colour fringing at demosaic edges). | Star cores and filament edges crisp up; chroma untouched. |
+| 8 | `clahe` (opt-in) | `stages/clahe.py` | Luma-only CLAHE with a blend-back into the original. | Dust lanes and galaxy arm contrast get lifted locally without boosting overall brightness. |
+| 9 | `curves` | `stages/curves.py` | Tanh S-curve, hue-preserving HSV saturation, per-channel luma-weighted gains, star-taper. | Final tonal shape and palette. Stars keep their native colour via the taper. |
+| 10 | `export` | `stages/export.py` | Writes a 16-bit RGB PNG via `pypng`. | A PNG you can open. |
+
+Stages 5, 8, `spcc`, `cosmetic`, `deconv`, and `dark_subtract` are
+**opt-in** — they run only when the active profile sets their param
+block. The core path (`io_fits → background → color → stretch →
+bm3d_denoise → sharpen → curves → export`) is always on.
 
 Each `process(image, **params)` accepts keyword overrides — the defaults
 in each module are a reasonable starting point; the more opinionated
@@ -446,6 +455,143 @@ The suite covers:
 
 Tests that consume real sample files auto-skip when `samples/` is empty.
 
+### Golden-image regression tests
+
+`tests/test_golden.py` runs the full pipeline on each of the six
+sample FITS files and compares the downscaled 400×400 output to a
+committed golden PNG via SSIM ≥ 0.95. The golden bundle lives in
+`backend/tests/golden/` (six PNGs, ~1.1 MB total).
+
+These catch silent drift from profile tunes, stretch-curve changes,
+or colour-stage regressions that the per-stage unit tests miss. They
+take ~7 minutes end to end because BM3D is the bottleneck.
+
+When a profile change is intentional, regenerate the goldens:
+
+```sh
+cd backend
+REGEN_GOLDEN=1 pytest -k test_golden
+```
+
+and commit the updated PNGs. The test auto-skips when `samples/` is
+absent, so contributors without the raw data still run the other
+110 tests.
+
+## Troubleshooting
+
+Common issues and what to do about them.
+
+### "Unsupported BITPIX" or wildly over/under-exposed output
+
+Input FITS uses a `BITPIX` the loader doesn't recognise, or the data
+was saved with a non-standard scaling. `io_fits.load_fits` normalises
+positive integer `BITPIX` by `2^BITPIX - 1`; float inputs are clipped
+to `[0, 1]` with no rescaling, which means a float FITS containing
+values in `[0, 10000]` will saturate.
+
+- Fix: re-export the file as uint16 (`BITPIX=16`) with the data
+  rescaled into the dtype's full range, or pre-scale yourself and
+  save as uint16.
+- Workaround: subclass `io_fits.load_fits` and add rescaling for the
+  specific `BITPIX` / data-range combo.
+
+### "Bayer pattern not recognised" / odd chromatic tint
+
+`io_fits` looks for `BAYERPAT`, then `BAYRPAT`, `COLORTYP`, `CFAPAT`.
+If none are present it assumes `RGGB` (Seestar S30/S50 default).
+Non-Seestar FITS with a different Bayer pattern will produce colour
+channels swapped after demosaic.
+
+- Fix: make sure your capture software writes the `BAYERPAT` header.
+  All major capture suites (SharpCap, N.I.N.A., Seestar firmware)
+  do this by default.
+- Workaround: manually patch the header before running:
+  ```python
+  from astropy.io import fits
+  with fits.open("capture.fits", mode="update") as f:
+      f[0].header["BAYERPAT"] = "GBRG"
+  ```
+
+### "Input is already 3-channel, skipping debayer"
+
+You fed in an already-debayered / stacked RGB FITS (shape `(3, H, W)`
+or `(H, W, 3)`). This is supported — the loader skips demosaic and
+passes the data through. But stacked data has usually already had
+some form of background + stretch applied, so running the full
+pipeline on top can double-process it.
+
+- Fix: if you have an unprocessed stack, you typically want to skip
+  `background` and use a gentler `stretch`. Either route the file
+  through `profile=default` with `--profile default` and edit that
+  profile's `stretch.stretch` down, or write a custom profile that
+  sets `background: {}` to no-op it.
+
+### "SPCC: skipped (no WCS in FITS header)"
+
+SPCC needs a plate-solve. Seestar firmware usually embeds a full 2D
+WCS + SIP distortion, but if the telescope fails to solve at capture
+time (clouds, short exposure, no reference stars) the FITS can land
+without WCS.
+
+- Fix: this isn't a bug — SPCC skips and the heuristic WB takes
+  over. If you want SPCC-level accuracy you need a solved image;
+  either re-capture, or pre-solve with astrometry.net / nova.astrometry
+  and inject the WCS headers.
+
+### "SPCC: only N < min_matches stars matched"
+
+Your image has fewer than the profile's `min_matches` (default 20)
+stars cross-matching to Gaia within the 2″ tolerance. Usually means
+the image has very few detectable stars (deep nebulosity, short
+exposure) or the WCS is off by more than 2″.
+
+- Fix: lower `min_matches` in the profile, or widen `tol_arcsec`
+  to 4-5″. If still failing, the WCS is suspect; try re-solving.
+
+### Golden-image tests failing after a tune
+
+Intentional profile changes that shift the output's hue, brightness,
+or structure will drop SSIM below 0.95 and fail `test_golden_matches`.
+
+- Fix: once you're happy with the tune, regenerate the golden:
+  ```sh
+  cd backend
+  REGEN_GOLDEN=1 pytest -k test_golden
+  git add tests/golden/ && git commit
+  ```
+- Diagnostic: compare the actual vs golden side-by-side. If the
+  diff is much bigger than you expected, you may have a real
+  regression rather than a tune.
+
+### "HTTP 429: too many jobs in flight"
+
+The backend caps concurrent jobs at `max_workers × 3` (default 6) to
+protect against a client flooding the queue. Wait for running jobs
+to finish, or raise `max_workers` / the multiplier in
+`backend/app/main.py` for a local deployment that can absorb more.
+
+### Seestar FITS with unusual headers
+
+- **No `BAYERPAT`**: assumed `RGGB` (Seestar default). Only wrong for
+  non-Seestar sources.
+- **Negative `BITPIX`** (float data): normalisation is skipped, data
+  is clipped to `[0, 1]`. Pre-stacked float FITS with values > 1
+  will saturate. Rescale before running.
+- **Already-calibrated / stacked**: see "Input is already 3-channel"
+  above. You may want to tune the profile rather than run the full
+  v1 pipeline.
+
+### Catalog / Parquet issues
+
+- `Gaia catalog not found`: `backend/app/data/gaia_bright.parquet`
+  didn't come through the clone. Run
+  `python backend/scripts/fetch_gaia.py` to regenerate (takes ~3 min,
+  needs network).
+- **Catalog too big for git / push warning**: the bundled 80 MB
+  full-sky catalog exceeds GitHub's 50 MB soft limit and will emit
+  a `GH001` warning on push. The push still succeeds; migrating the
+  file to Git LFS is [tracked in BACKLOG](BACKLOG.md).
+
 ## Project structure in detail
 
 ```
@@ -488,6 +634,114 @@ module-level state. That property is what keeps the pipeline easy to
 parallelize later (per-image, not per-stage) and easy to reason about in
 tests.
 
+## Writing a new stage
+
+Adding a stage takes ~50 lines of code plus tests. The hard part is
+deciding *where* in the pipeline it goes and what parameters it
+exposes; the mechanical parts are constrained by the stage contract.
+
+### The stage contract
+
+```python
+def process(image: np.ndarray, **params) -> np.ndarray: ...
+```
+
+- `image` is **always** shape `(H, W, 3)`, dtype `float32`, values in
+  `[0, 1]`. Do not accept or return other shapes/dtypes/ranges.
+- Return a new array of the same shape/dtype/range. Stages are pure —
+  no module-level state, no in-place mutation of the input.
+- Parameters are keyword-only and every one has a default. This lets
+  `profiles.py` override any subset without specifying the full set.
+- Invalid inputs raise `ValueError` with a useful message; the pipeline
+  does not silently fall back.
+
+The contract is tight on purpose. It lets the pipeline compose stages
+in any order without shape/dtype adapters and makes each stage
+independently testable against a single synthetic input.
+
+### Anatomy of a minimal stage
+
+```python
+# backend/app/stages/my_stage.py
+"""One-line summary of what this stage does.
+
+Longer description if useful — WHY we need this stage, WHAT it does
+to the pixels, and any constraint the caller should know about.
+"""
+from __future__ import annotations
+
+import numpy as np
+
+
+def process(
+    image: np.ndarray,
+    strength: float = 1.0,
+) -> np.ndarray:
+    if image.ndim != 3 or image.shape[-1] != 3:
+        raise ValueError(f"expected (H, W, 3), got {image.shape}")
+
+    out = image.astype(np.float32, copy=True)
+    # ... do work ...
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+```
+
+### Wire it into the pipeline
+
+`backend/app/pipeline.py` has the stage order as a sequence of
+`if params.get("my_stage") is not None: img = my_stage.process(img,
+**params["my_stage"])` blocks. New stages land between existing
+stages at the appropriate point in the flow — most new post-processing
+goes between `bm3d_denoise` and `curves`; anything that needs linear-
+space input goes before `stretch`.
+
+### Expose it in a profile
+
+```python
+# backend/app/profiles.py
+NEBULA = {
+    **DEFAULT,
+    # ... existing stage overrides ...
+    "my_stage": {"strength": 0.6},
+}
+```
+
+Any stage parameter you omit falls back to the stage's built-in
+default. Setting a stage to `None` in a profile disables it outright
+(useful for sub-profiles that opt out of a parent's opt-in stage).
+
+### Test it
+
+Two tests minimum per stage:
+
+1. **Shape/range test** — the contract. Throw a synthetic
+   `(H, W, 3) float32 in [0, 1]` at it and verify the output matches.
+2. **Behavioural test** — verify the stage actually does what it
+   says. For `bm3d_denoise`, that's "noisy input has lower variance
+   after"; for `sharpen`, "edges have higher gradient after"; for
+   `background`, "gradient is smaller after". One crisp assertion is
+   enough — these are smoke tests, not full characterizations.
+
+Put them in `backend/tests/test_stages.py` alongside the existing
+ones (grouped by stage via comments), or — if the stage is
+substantial — in its own `tests/test_my_stage.py`. Both conventions
+exist in the tree.
+
+If the stage has user-visible visual impact on real samples, it'll
+automatically get covered by the golden-image tests once you run
+`REGEN_GOLDEN=1 pytest -k test_golden`.
+
+### Check the guardrails
+
+Before you push:
+
+```sh
+cd backend
+pytest                                   # all tests, including golden
+ruff check . && ruff format --check .    # lint + format
+```
+
+CI runs both on push and pull request.
+
 ## v2 roadmap
 
 The v2 stubs are wired so that dropping in weights and removing a couple
@@ -517,7 +771,7 @@ of `NotImplementedError` lines is enough to enable the ML flow.
 
 See [BACKLOG.md](BACKLOG.md) for the broader backlog, not just ML.
 
-## Bundled model licenses
+## Bundled model licenses & weights policy
 
 **v1 ships no model weights.** `backend/app/models/` is empty on
 purpose, and `stages/stars.py` / `stages/ml_denoise.py` are
@@ -528,12 +782,56 @@ runtime dependency (astropy, numpy, scipy, scikit-image, Pillow, pypng,
 colour-demosaicing, bm3d, FastAPI, react, react-compare-slider) uses a
 permissive license (MIT / BSD / Apache-2.0).
 
-When v2 lands, any bundled weights will be listed here by name, file
-path, SHA-256, and license. The [status section](#status--design-philosophy)
-has the policy on which licenses are acceptable (MIT-compatible
-permissive only — no CC BY-NC-SA weights, no GPL'd model checkpoints
-smuggled in via dependency trees). Until then there's nothing in this
-section beyond "none, by design".
+### Policy
+
+The project is MIT-licensed and intends to stay that way. Any weights
+bundled into the distribution must pass **all four** of the following:
+
+1. **Permissive license.** MIT, BSD-2/3, Apache-2.0, Unlicense, CC0,
+   or a comparably permissive custom license. **Not acceptable:**
+   CC BY-NC (non-commercial), CC BY-SA / CC BY-NC-SA (ShareAlike
+   viral), GPL / LGPL (copyleft), source-available licenses with
+   field-of-use restrictions.
+2. **Attribution traceable.** The author(s), upstream URL, training
+   data provenance, and exact license text must be recorded in the
+   model registry manifest.
+3. **SHA-256 pinned.** Weights are identified by hash, not tag. The
+   manifest records the hash; the build step verifies it.
+4. **Inference-only.** Weights are bundled for inference. Training
+   pipelines and training data are separate concerns and are not
+   required to be permissive.
+
+Reasoning: CC BY-NC-SA kills commercial self-hosting, ShareAlike
+forces every downstream app to re-license, and GPL model checkpoints
+can contaminate the runtime if any linkage theory applies (the
+industry consensus is unclear — we avoid the question by rejecting
+GPL weights outright).
+
+### What's been rejected and why
+
+| Model | Reason |
+| --- | --- |
+| StarNet++ v2 | Weights are CC BY-NC-SA 4.0 — non-commercial + ShareAlike. Both clauses are blockers. |
+| GraXpert AI denoise | Code is GPL-3.0; weights license is unspecified and the runtime downloads them from S3 (no reproducibility, no pinning). |
+| StarXTerminator / NoiseXTerminator | Commercial, proprietary weights. |
+
+Until a permissive alternative exists, v1 ships classical fallbacks
+(median star split, BM3D denoise) for the same capabilities.
+
+### Bundled weights
+
+**None.** Once v2 lands, each bundled file will be listed below by
+path, SHA-256, and license, e.g.:
+
+```
+backend/app/models/starnet_mit.onnx
+  SHA-256: <hex>
+  License: MIT
+  Upstream: <url>
+```
+
+The `backend/app/models/` directory is reserved for this purpose and
+is empty today.
 
 ## Contributing
 

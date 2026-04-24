@@ -438,14 +438,27 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 
 ## Documentation
 
-- [ ] A short "what's happening under the hood" page with before/after
-  images per stage, suitable for linking from the README.
-- [ ] Stage-authoring guide: the contract (`(H,W,3) float32 in [0,1]`),
-  how to add to `profiles.py`, how to test.
-- [ ] License & weights policy page spelling out the v1 MIT posture and
-  the bar v2 weights must meet to be accepted.
-- [ ] Troubleshooting: what to do when FITS files have unusual headers
-  (missing `BAYERPAT`, unusual `BITPIX`, stacked/calibrated inputs).
+- [x] **"Under the hood" coverage in the README** — _Shipped in the
+  README doc pass._ The Stage reference table now includes a
+  "What the pixels look like after" column describing the visual
+  effect of each stage. Full before/after image gallery per stage
+  still TODO — would need intermediate PNGs committed and is a
+  larger scope.
+- [x] **Stage-authoring guide** — _Shipped in the README as the
+  "Writing a new stage" section._ Covers the contract, anatomy of
+  a minimal stage, pipeline wiring, profile exposure, tests, and
+  the CI guardrails.
+- [x] **License & weights policy page** — _Shipped in the README as
+  the "Bundled model licenses & weights policy" section._ The
+  four-point acceptance bar (permissive license / attribution
+  traceable / SHA-256 pinned / inference-only) is now explicit,
+  with a rejected-list covering StarNet++ v2, GraXpert AI denoise,
+  and StarXTerminator.
+- [x] **Troubleshooting** — _Shipped in the README as the
+  "Troubleshooting" section._ Covers `BITPIX` / Bayer pattern /
+  already-debayered FITS / SPCC-no-WCS / SPCC-low-match-count /
+  golden-test failures / 429 / stacked inputs / catalog fetch
+  issues.
 
 ## Nice-to-have
 
