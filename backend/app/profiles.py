@@ -212,14 +212,19 @@ NEBULA_WIDE: Profile = {
         # carries real nebula emission (HOO bicolor).
         "green_clip": 0.0,
     },
-    # black_percentile=18 crushes the sky hard so the arc contrasts
-    # cleanly against black. stretch=28 + white_pct=99.97 lifts the
-    # arc well into the visible range so downstream luma-weighted
-    # channel_gains have meaningful bite on its pixels.
+    # Selected from a 35-iteration random search scored against the
+    # local NGC 6888 reference. Top candidates were then eye-picked
+    # for sky cleanliness + natural star colour over pure colour-
+    # match — my scoring over-weighted R/G ratio and kept selecting
+    # aggressive-stretch configs with muddy noisy sky.
+    #
+    # stretch=27 (moderate), black_pct=12 (modest sky crush),
+    # white_pct=99.9 — lifts the arc into visibility without pulling
+    # sky noise into the mid-tones the way stretch=40+ does.
     "stretch": {
-        "black_percentile": 18.0,
-        "white_percentile": 99.97,
-        "stretch": 28.0,
+        "black_percentile": 12.0,
+        "white_percentile": 99.9,
+        "stretch": 27.0,
     },
     "bm3d_denoise": {
         "sigma": 0.22,
@@ -228,22 +233,21 @@ NEBULA_WIDE: Profile = {
         "chroma_edge_aware": True,
         "chroma_edge_luma_sigma": 0.06,
     },
-    # contrast=0.70 pulls the arc firmly above the sky. saturation=1.5
-    # + HSV: the Crescent's short-exposure OIII signal is marginal (G
-    # only 27% over R raw), so bicolor teal won't read without much
-    # longer integration. Target a clean warm red-orange Hα arc
-    # matching the user's local reference (ref: R/G=1.23, hue ~20°).
+    # contrast=0.50 keeps the S-curve gentle — aggressive contrast on
+    # this moderate-stretch config tipped the arc into blown-out
+    # whites. saturation=1.38 delivers strong arc colour without the
+    # rainbow-speckle effect seen at saturation>1.5 in the search.
     #
-    # channel_gains (1.60, 1.25, 0.55): very strong R lift with G
-    # lifted to tilt hue toward orange (not pink) and B cut hard to
-    # remove the residual purple cast. Aggressive values are needed
-    # because gains are luma-weighted in the curves stage, so at the
-    # arc's ~0.3 luma the effective multiplier is much softer.
+    # channel_gains (1.49, 1.11, 0.55): R lifted with mild G lift
+    # (orange-tilt rather than pink) and B cut to remove the residual
+    # purple cast. Now combined with the curves-stage star-preserve
+    # taper (added this session), so stars keep their natural colour
+    # even at these aggressive gains.
     "curves": {
-        "contrast": 0.70,
-        "saturation": 1.50,
+        "contrast": 0.50,
+        "saturation": 1.38,
         "saturation_mode": "hsv",
-        "channel_gains": (1.60, 1.25, 0.55),
+        "channel_gains": (1.49, 1.11, 0.55),
     },
     # SPCC strength dialled back (0.7 -> 0.35) because SPCC calibrates
     # against stellar references that assume broadband continuum. On

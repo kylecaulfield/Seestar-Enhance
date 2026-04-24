@@ -88,8 +88,19 @@ def process(
             )
         luma = img.mean(axis=-1, keepdims=True)  # (H, W, 1) in [0,1]
         gains = np.asarray(channel_gains, dtype=np.float32)[None, None, :]
-        # effective gain = 1 + (gain - 1) * luma
-        effective = 1.0 + (gains - 1.0) * luma
+        # Luma-weight: dark sky pixels stay neutral (no pink cast in sky).
+        weight = luma.copy()
+        # Star-preserve: taper channel_gains back to identity at the
+        # brightest pixels (same rationale as the saturation taper
+        # below). Without this, aggressive warm gains give stars a
+        # yellow-green tint because they sit at luma≈1.0 and get the
+        # full gain applied.
+        if star_preserve_percentile is not None:
+            thresh = float(np.percentile(luma, star_preserve_percentile))
+            if thresh > 0:
+                over = np.clip((luma - thresh) / max(1.0 - thresh, 1e-6), 0.0, 1.0)
+                weight = weight * (1.0 - over)
+        effective = 1.0 + (gains - 1.0) * weight
         img = np.clip(img * effective, 0.0, 1.0).astype(np.float32)
 
     if saturation_mode not in ("linear", "hsv"):
