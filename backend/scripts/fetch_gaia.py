@@ -53,25 +53,40 @@ FROM gaiadr3.gaia_source
 WHERE phot_g_mean_mag < {g_limit}
   AND phot_bp_mean_mag IS NOT NULL
   AND phot_rp_mean_mag IS NOT NULL
-ORDER BY source_id
+  AND ra >= {ra_lo} AND ra < {ra_hi}
 """.strip()
 
 
-def fetch_esa(g_limit: float, use_async: bool = True):
-    """Fetch from the ESA Gaia TAP service. Canonical source."""
-    from astroquery.gaia import Gaia
+# ESA TAP async results are capped server-side at 3,000,000 rows. A
+# single full-sky G<12 query (~3.1M rows) hits the cap and silently
+# truncates. Splitting by RA quadrant keeps each band below the cap,
+# and vstack'ing the four results gives a complete catalogue.
+_RA_BANDS = [(0.0, 90.0), (90.0, 180.0), (180.0, 270.0), (270.0, 360.0)]
 
-    query = _ADQL_TEMPLATE_ESA.format(g_limit=f"{g_limit:.2f}")
-    print(f"ESA TAP: G < {g_limit}, async={use_async} ...")
+
+def fetch_esa(g_limit: float, use_async: bool = True):
+    """Fetch from the ESA Gaia TAP service in four RA bands."""
+    from astroquery.gaia import Gaia
+    from astropy.table import vstack
+
+    tables = []
     t0 = time.time()
-    if use_async:
-        job = Gaia.launch_job_async(query)
-    else:
-        job = Gaia.launch_job(query)
-    results = job.get_results()
-    dt = time.time() - t0
-    print(f"  received {len(results):,} rows in {dt:.1f} s")
-    return results
+    for lo, hi in _RA_BANDS:
+        q = _ADQL_TEMPLATE_ESA.format(
+            g_limit=f"{g_limit:.2f}", ra_lo=lo, ra_hi=hi,
+        )
+        print(f"ESA TAP: G<{g_limit}, RA [{lo:g},{hi:g}), async={use_async} ...")
+        t = time.time()
+        job = (
+            Gaia.launch_job_async(q) if use_async
+            else Gaia.launch_job(q)
+        )
+        r = job.get_results()
+        print(f"  band: {len(r):,} rows in {time.time()-t:.1f} s")
+        tables.append(r)
+    merged = vstack(tables)
+    print(f"  merged: {len(merged):,} rows in {time.time()-t0:.1f} s total")
+    return merged
 
 
 def fetch_vizier(g_limit: float):
@@ -132,13 +147,14 @@ def save_parquet(table, path: Path) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build an Arrow table column-by-column with compact dtypes.
-    # ra/dec stay float64 (needed for arcsec-scale cross-match
-    # accuracy); magnitudes downcast to float32 (Gaia quotes them to
-    # ~0.01 mag, more than float32 resolution already).
+    # ra/dec stored as float32 — at RA=360 float32 has ~0.4 arcsec
+    # precision, well inside SPCC's 2-arcsec match tolerance. Saves
+    # 24 MB over float64 on a 3M-row catalogue.
+    # Magnitudes stay float32 — Gaia quotes them to ~0.01 mag, more
+    # than float32 resolution already.
     arrays = {
-        "ra": pa.array(np.asarray(table["ra"], dtype=np.float64)),
-        "dec": pa.array(np.asarray(table["dec"], dtype=np.float64)),
+        "ra": pa.array(np.asarray(table["ra"], dtype=np.float32)),
+        "dec": pa.array(np.asarray(table["dec"], dtype=np.float32)),
         "phot_g_mean_mag": pa.array(
             np.asarray(table["phot_g_mean_mag"], dtype=np.float32)
         ),
@@ -150,11 +166,14 @@ def save_parquet(table, path: Path) -> None:
         ),
     }
     arrow_table = pa.Table.from_pydict(arrays)
+    # Brotli gets ~25% better ratio than snappy on numeric data.
+    # Encoders on modern Python have fast-enough decode that load
+    # time is still dominated by parsing, not decompression.
     pq.write_table(
         arrow_table,
         str(path),
-        compression="snappy",
-        row_group_size=100_000,
+        compression="brotli",
+        row_group_size=200_000,
     )
     size_mb = path.stat().st_size / (1024 * 1024)
     print(f"Wrote {path} ({size_mb:.2f} MB, {len(arrow_table):,} rows)")

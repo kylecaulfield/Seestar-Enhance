@@ -45,8 +45,11 @@ def test_schema_matches() -> None:
     assert set(table.schema.names) == _EXPECTED_COLUMNS, (
         f"schema mismatch: {set(table.schema.names)} vs {_EXPECTED_COLUMNS}"
     )
-    assert table.schema.field("ra").type == pa.float64()
-    assert table.schema.field("dec").type == pa.float64()
+    # ra/dec may be float32 or float64. float32 is sufficient for SPCC
+    # (~0.4 arcsec precision at RA=360, inside the 2-arcsec match
+    # tolerance) and saves 24 MB on a 3M-row full-sky bundle.
+    for coord in ("ra", "dec"):
+        assert table.schema.field(coord).type in (pa.float32(), pa.float64())
     for mag in ("phot_g_mean_mag", "phot_bp_mean_mag", "phot_rp_mean_mag"):
         assert table.schema.field(mag).type == pa.float32()
 
