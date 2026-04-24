@@ -21,9 +21,8 @@ denoise the low-frequency component only. On the Seestar sensor this is
 nearly indistinguishable from full-res BM3D for the noise scales we care
 about (chroma speckle is a low-frequency phenomenon).
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import bm3d
 import numpy as np
@@ -64,9 +63,7 @@ def _chroma_smooth(image: np.ndarray, radius: float) -> np.ndarray:
     return np.clip(luma + smoothed, 0.0, 1.0).astype(np.float32)
 
 
-def _chroma_bilateral(
-    image: np.ndarray, radius: float, luma_sigma: float
-) -> np.ndarray:
+def _chroma_bilateral(image: np.ndarray, radius: float, luma_sigma: float) -> np.ndarray:
     """Edge-preserving chroma smooth: chroma gets smoothed strongly in
     flat-luma regions and weakly (or not at all) across luma edges.
 
@@ -86,11 +83,11 @@ def _chroma_bilateral(
         return image
     luma = image.mean(axis=-1, keepdims=True)
     chroma = image - luma
-    l = luma[..., 0]
+    luma_2d = luma[..., 0]
 
     # 1. Smooth luma at a generous scale so noise doesn't masquerade
     #    as an "edge". Scale ≈ the chroma-smoothing radius.
-    smoothed_l = gaussian_filter(l, sigma=float(radius))
+    smoothed_l = gaussian_filter(luma_2d, sigma=float(radius))
 
     # 2. Gradient magnitude on the smoothed luma.
     gy, gx = np.gradient(smoothed_l)
@@ -99,7 +96,7 @@ def _chroma_bilateral(
     # 3. Edge weight: 1 where the smoothed luma is flat, 0 at edges.
     #    luma_sigma is the gradient magnitude at which we switch off
     #    chroma smoothing; larger → more aggressive smoothing.
-    edge_w = np.exp(-(grad_mag / max(luma_sigma, 1e-6)) ** 2).astype(np.float32)
+    edge_w = np.exp(-((grad_mag / max(luma_sigma, 1e-6)) ** 2)).astype(np.float32)
     edge_w = edge_w[..., np.newaxis]
 
     # 4. Gaussian-blur the chroma channels.
@@ -124,7 +121,7 @@ def _resize(image: np.ndarray, new_shape: tuple[int, int]) -> np.ndarray:
 
 def process(
     image: np.ndarray,
-    sigma: Optional[float] = None,
+    sigma: float | None = None,
     strength: float = 1.0,
     chroma_blur: float = 0.0,
     downsample_factor: int = 1,

@@ -1,15 +1,15 @@
 """Tests for reference-match items 6-10:
-    - Elongation metric in classifier
-    - nebula_wide / nebula_filament sub-variants
-    - Seestar S50 CCM
-    - Dark-frame subtraction
-    - HSV-space saturation mode
+- Elongation metric in classifier
+- nebula_wide / nebula_filament sub-variants
+- Seestar S50 CCM
+- Dark-frame subtraction
+- HSV-space saturation mode
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from app import profiles
 from app.stages import classify, color, curves, dark_subtract
 
@@ -21,6 +21,7 @@ def _rng_sky(h: int = 256, w: int = 256, seed: int = 0) -> np.ndarray:
 
 
 # ----- Item 7: elongation metric -----
+
 
 def test_elongation_metric_exists() -> None:
     m = classify._metrics(_rng_sky())
@@ -37,7 +38,7 @@ def test_elongation_distinguishes_filament_from_blob() -> None:
         np.linspace(-1, 1, w, dtype=np.float32),
         indexing="ij",
     )
-    bump = 0.5 * np.exp(-(xx ** 2 + yy ** 2) / 0.05)
+    bump = 0.5 * np.exp(-(xx**2 + yy**2) / 0.05)
     for c in range(3):
         blob[..., c] += bump
     blob = np.clip(blob, 0.0, 1.0)
@@ -55,6 +56,7 @@ def test_elongation_distinguishes_filament_from_blob() -> None:
 
 # ----- Item 6: sub-variants registered -----
 
+
 def test_sub_variant_profiles_registered() -> None:
     assert "nebula_wide" in profiles.PROFILES
     assert "nebula_filament" in profiles.PROFILES
@@ -66,6 +68,7 @@ def test_sub_variant_profiles_registered() -> None:
 
 
 # ----- Item 8: sensor CCM -----
+
 
 def _varied_sky(seed: int = 0) -> np.ndarray:
     """A non-constant sky with a central brighter patch. Gives
@@ -112,6 +115,7 @@ def test_ccm_rejects_unknown_preset() -> None:
 
 # ----- Item 9: dark-frame subtraction -----
 
+
 def test_dark_subtract_is_noop_when_none() -> None:
     img = np.full((32, 32, 3), 0.5, dtype=np.float32)
     out = dark_subtract.process(img, dark=None)
@@ -142,6 +146,7 @@ def test_dark_subtract_rejects_mismatched_shape() -> None:
 
 
 # ----- Item 10: HSV-space saturation -----
+
 
 def test_hsv_saturation_preserves_hue_on_pure_colors() -> None:
     # Pure red pixel; bump saturation. It should stay red.
@@ -176,11 +181,17 @@ def test_saturation_linear_shifts_channels_differently_than_hsv() -> None:
     img[..., 1] = 0.1
     img[..., 2] = 0.05
     out_linear = curves.process(
-        img, contrast=0.0, saturation=2.0, saturation_mode="linear",
+        img,
+        contrast=0.0,
+        saturation=2.0,
+        saturation_mode="linear",
         star_preserve_percentile=None,
     )
     out_hsv = curves.process(
-        img, contrast=0.0, saturation=2.0, saturation_mode="hsv",
+        img,
+        contrast=0.0,
+        saturation=2.0,
+        saturation_mode="hsv",
         star_preserve_percentile=None,
     )
     assert not np.allclose(out_linear, out_hsv, atol=1e-3)

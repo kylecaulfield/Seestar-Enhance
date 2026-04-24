@@ -14,6 +14,7 @@ Deconvolution is applied to the LUMA only:
 
 Contract: `(H, W, 3)` float32 in `[0, 1]` in, same out.
 """
+
 from __future__ import annotations
 
 import numpy as np

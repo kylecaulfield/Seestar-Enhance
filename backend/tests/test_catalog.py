@@ -5,12 +5,11 @@ when it's present, and skip cleanly when it isn't (so CI still passes
 before the data file lands, and so contributors without network access
 aren't forced to fetch 30 MB of catalog data).
 """
+
 from __future__ import annotations
 
 import pytest
-
 from app.data import GAIA_PARQUET, gaia_catalog_exists
-
 
 _EXPECTED_COLUMNS = {
     "ra",

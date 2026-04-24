@@ -26,3 +26,16 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+# Tolerant starter profile. The codebase has no type-annotation
+# baseline yet; tightening lands incrementally. The `ignore_missing`
+# flag is there because astropy/scipy/colour-demosaicing/bm3d/skimage
+# don't all ship PEP 561 stubs.
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_redundant_casts = true
+warn_unused_ignores = true
+pretty = true
+files = ["app"]

@@ -32,11 +32,12 @@ typical broadband RGB camera that a direct magnitude-to-flux mapping
 captures the dominant colour-vs-temperature behaviour. The rest is
 absorbed by the free 3×3 matrix.
 """
+
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 from scipy.ndimage import maximum_filter
@@ -46,7 +47,7 @@ from app.data import GAIA_PARQUET, gaia_catalog_exists
 
 logger = logging.getLogger(__name__)
 
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 
 # ---------- helpers ---------------------------------------------------------
@@ -110,11 +111,11 @@ def _detect_bright_stars(
 
 
 def _catalog_in_fov(
-    cat: Dict[str, np.ndarray],
+    cat: dict[str, np.ndarray],
     wcs: Any,
-    image_shape: Tuple[int, int],
+    image_shape: tuple[int, int],
     margin_deg: float = 0.2,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """Filter a catalog dict to rows whose RA/Dec project inside the image.
 
     Uses a two-stage filter:
@@ -182,9 +183,14 @@ def _catalog_in_fov(
         px_per_deg = 1800.0  # fallback; ~Seestar-sized
     margin_px = float(margin_deg * px_per_deg)
 
-    keep = (xs > -margin_px) & (xs < w + margin_px) & \
-           (ys > -margin_px) & (ys < h + margin_px) & \
-           np.isfinite(xs) & np.isfinite(ys)
+    keep = (
+        (xs > -margin_px)
+        & (xs < w + margin_px)
+        & (ys > -margin_px)
+        & (ys < h + margin_px)
+        & np.isfinite(xs)
+        & np.isfinite(ys)
+    )
     kept_idx = idx[keep]
 
     out = {k: np.asarray(v)[kept_idx] for k, v in cat.items()}
@@ -195,7 +201,7 @@ def _cross_match(
     img_radec: np.ndarray,
     cat_radec: np.ndarray,
     tol_arcsec: float = 2.0,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Nearest-neighbour match of image stars to catalogue stars.
 
     Operates in a Dec-scaled flat (RA', Dec) plane: at angular scales
@@ -233,12 +239,8 @@ def _cross_match(
     # to 1° on the sky regardless of latitude. Use the mean catalog
     # Dec since the img/cat sets should be colocated on sky anyway.
     dec_scale = float(np.cos(np.deg2rad(cat_radec[:, 1].mean())))
-    cat_flat = np.stack(
-        [cat_radec[:, 0] * dec_scale, cat_radec[:, 1]], axis=1
-    )
-    img_flat = np.stack(
-        [img_radec[:, 0] * dec_scale, img_radec[:, 1]], axis=1
-    )
+    cat_flat = np.stack([cat_radec[:, 0] * dec_scale, cat_radec[:, 1]], axis=1)
+    img_flat = np.stack([img_radec[:, 0] * dec_scale, img_radec[:, 1]], axis=1)
     tree = cKDTree(cat_flat)
     tol_deg = tol_arcsec / 3600.0
     dists, idxs = tree.query(img_flat, k=1, distance_upper_bound=tol_deg)
@@ -298,12 +300,12 @@ def _measure_star_rgb(
         return out
 
     # Precompute circular masks relative to the aperture centre.
-    rr, cc = np.mgrid[-annulus_outer : annulus_outer + 1,
-                      -annulus_outer : annulus_outer + 1]
+    rr, cc = np.mgrid[-annulus_outer : annulus_outer + 1, -annulus_outer : annulus_outer + 1]
     dist2 = rr * rr + cc * cc
     aperture_mask = dist2 <= aperture_r * aperture_r
-    annulus_mask = (dist2 >= annulus_inner * annulus_inner) & \
-                   (dist2 <  annulus_outer * annulus_outer)
+    annulus_mask = (dist2 >= annulus_inner * annulus_inner) & (
+        dist2 < annulus_outer * annulus_outer
+    )
 
     for i, (y, x) in enumerate(stars_yx):
         y0 = y - annulus_outer
@@ -313,8 +315,8 @@ def _measure_star_rgb(
         if y0 < 0 or x0 < 0 or y1 > h or x1 > w:
             continue  # too close to an edge; leave row at zero
         patch = image[y0:y1, x0:x1, :]  # (2R+1, 2R+1, 3)
-        aperture_pixels = patch[aperture_mask]      # (Na, 3)
-        annulus_pixels = patch[annulus_mask]        # (Nb, 3)
+        aperture_pixels = patch[aperture_mask]  # (Na, 3)
+        annulus_pixels = patch[annulus_mask]  # (Nb, 3)
         if aperture_pixels.size == 0 or annulus_pixels.size == 0:
             continue
         # Use the median of the annulus to estimate sky, mean of the
@@ -344,7 +346,7 @@ def _gaia_to_target_rgb(
     g_mag: np.ndarray,
     bp_mag: np.ndarray,
     rp_mag: np.ndarray,
-    solar_reference_bp_rp: Optional[float] = _G2V_BP_RP,
+    solar_reference_bp_rp: float | None = _G2V_BP_RP,
     color_amplitude: float = 0.08,
 ) -> np.ndarray:
     """Convert Gaia BP/G/RP magnitudes to per-star target RGB fluxes.
@@ -385,11 +387,7 @@ def _gaia_to_target_rgb(
     # Milky Way disk are systematically reddened, so anchoring to
     # the *median observed colour* (rather than an absolute solar
     # value) keeps the calibration from over-bluing in dusty fields.
-    ref = (
-        float(np.median(bp_rp))
-        if solar_reference_bp_rp is None
-        else float(solar_reference_bp_rp)
-    )
+    ref = float(np.median(bp_rp)) if solar_reference_bp_rp is None else float(solar_reference_bp_rp)
     offset = (bp_rp - ref) * float(color_amplitude)
     r = 1.0 / 3.0 + offset
     g = np.full_like(r, 1.0 / 3.0)
@@ -429,9 +427,7 @@ def _fit_ccm(
             f"shape mismatch: measured {measured_rgb.shape} vs target {target_rgb.shape}"
         )
     if measured_rgb.shape[0] < 3 or measured_rgb.shape[-1] != 3:
-        raise ValueError(
-            f"need at least 3 stars in an (N, 3) array; got {measured_rgb.shape}"
-        )
+        raise ValueError(f"need at least 3 stars in an (N, 3) array; got {measured_rgb.shape}")
     if mode not in ("diagonal", "full"):
         raise ValueError(f"mode must be 'diagonal' or 'full', got {mode!r}")
 
@@ -479,7 +475,7 @@ def _fit_ccm(
     return (m / row_sums).astype(np.float64)
 
 
-def _load_catalog(path: PathLike) -> Dict[str, np.ndarray]:
+def _load_catalog(path: PathLike) -> dict[str, np.ndarray]:
     """Load the bundled Gaia Parquet as a dict-of-ndarrays.
 
     Uses pyarrow directly (no pandas). Returns the five columns SPCC
@@ -503,8 +499,8 @@ def _load_catalog(path: PathLike) -> Dict[str, np.ndarray]:
 
 def process(
     image: np.ndarray,
-    wcs: Optional[Any] = None,
-    catalog_path: Optional[PathLike] = None,
+    wcs: Any | None = None,
+    catalog_path: PathLike | None = None,
     min_matches: int = 20,
     n_detect: int = 200,
     tol_arcsec: float = 2.0,
@@ -516,7 +512,7 @@ def process(
     sky_percentile: float = 10.0,
     signal_percentile: float = 95.0,
     strength: float = 0.5,
-    solar_reference_bp_rp: Optional[float] = _G2V_BP_RP,
+    solar_reference_bp_rp: float | None = _G2V_BP_RP,
     color_amplitude: float = 0.08,
     **_unused: Any,
 ) -> np.ndarray:
@@ -639,7 +635,9 @@ def process(
         "SPCC: fit %s CCM from %d matched stars; gains=[%.3f, %.3f, %.3f]",
         mode,
         measured.shape[0],
-        ccm[0, 0], ccm[1, 1], ccm[2, 2],
+        ccm[0, 0],
+        ccm[1, 1],
+        ccm[2, 2],
     )
 
     # --- apply ----------------------------------------------------------

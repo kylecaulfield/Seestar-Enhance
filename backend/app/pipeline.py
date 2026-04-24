@@ -21,13 +21,14 @@ Progress callback:
 v2 will insert star removal (after stretch) and replace bm3d_denoise with
 an ML denoiser. See stages/stars.py and stages/ml_denoise.py for stubs.
 """
+
 from __future__ import annotations
 
 import argparse
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional, Union
 
 import numpy as np
 
@@ -44,13 +45,13 @@ from app.stages import (
     deconv,
     export,
     sharpen,
+    spcc,
     stars,
     stretch,
 )
 from app.stages.io_fits import load_fits_with_wcs
-from app.stages import spcc
 
-PathLike = Union[str, Path]
+PathLike = str | Path
 ProgressCallback = Callable[[str, float], None]
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,17 @@ logger = logging.getLogger(__name__)
 # Stages in execution order. Progress is reported as stage-starting
 # (frac=0.0) and stage-finished (frac=1.0); intermediate fractions are
 # reserved for long-running stages that learn to emit their own updates.
-_STAGES = ("load", "classify", "background", "color", "stretch",
-           "bm3d_denoise", "sharpen", "curves", "export")
+_STAGES = (
+    "load",
+    "classify",
+    "background",
+    "color",
+    "stretch",
+    "bm3d_denoise",
+    "sharpen",
+    "curves",
+    "export",
+)
 
 
 def _noop_progress(stage: str, frac: float) -> None:  # noqa: ARG001
@@ -70,10 +80,10 @@ def _noop_progress(stage: str, frac: float) -> None:  # noqa: ARG001
 def run(
     input_fits: PathLike,
     output_png: PathLike,
-    profile: Optional[str] = None,
+    profile: str | None = None,
     verbose: bool = False,
-    progress: Optional[ProgressCallback] = None,
-    dark: Optional[np.ndarray] = None,
+    progress: ProgressCallback | None = None,
+    dark: np.ndarray | None = None,
 ) -> np.ndarray:
     """Run the full v1 pipeline.
 
@@ -226,13 +236,122 @@ def run(
     return img
 
 
+def _coerce_override_value(raw: str) -> object:
+    """Parse an `--override stage.param=value` value into a Python literal.
+
+    Tries int, then float, then bool ("true"/"false"), else returns the
+    raw string. Lists/tuples are parsed through a minimal comma split —
+    enough for `channel_gains=1.4,1.1,0.7` which is the dominant shape
+    of overrides we need.
+    """
+    if "," in raw:
+        return tuple(_coerce_override_value(part.strip()) for part in raw.split(","))
+    if raw.lower() in ("true", "false"):
+        return raw.lower() == "true"
+    if raw.lower() == "none":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    return raw
+
+
+def _apply_overrides(profile_dict: dict, overrides: list[str]) -> dict:
+    """Apply `stage.param=value` overrides to a profile dict.
+
+    Returns a *new* dict so the shared profile registry isn't mutated.
+    """
+    import copy
+
+    result = copy.deepcopy(profile_dict)
+    for entry in overrides:
+        if "=" not in entry:
+            raise ValueError(f"override {entry!r} must be of the form stage.param=value")
+        key, value_raw = entry.split("=", 1)
+        if "." not in key:
+            raise ValueError(f"override key {key!r} must be of the form stage.param")
+        stage, param = key.split(".", 1)
+        value = _coerce_override_value(value_raw)
+        result.setdefault(stage, {})
+        if not isinstance(result[stage], dict):
+            raise ValueError(f"override target {stage!r} is not a stage params dict")
+        result[stage][param] = value
+    return result
+
+
+def _run_one(
+    input_path: PathLike,
+    output_path: PathLike,
+    profile: str | None,
+    overrides: list[str],
+    verbose: bool,
+) -> None:
+    """Single-file run that threads --override through the profile layer.
+
+    Resolves the profile (auto-classify if not supplied) then deep-copies
+    it, applies overrides, and monkey-patches it into the profile registry
+    for the duration of the call so `pipeline.run()` picks it up.
+    """
+    if not overrides:
+        run(input_path, output_path, profile=profile, verbose=verbose)
+        return
+
+    if profile is None:
+        img, _ = load_fits_with_wcs(input_path)
+        profile = classify.classify(img)
+    base = profiles.get(profile)
+    patched = _apply_overrides(base, overrides)
+
+    # Patch the registry entry for this one call, then restore.
+    original = profiles.PROFILES[profile]
+    profiles.PROFILES[profile] = patched
+    try:
+        run(input_path, output_path, profile=profile, verbose=verbose)
+    finally:
+        profiles.PROFILES[profile] = original
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.pipeline",
         description="Run the Seestar enhancement pipeline end-to-end (v1).",
     )
-    parser.add_argument("input", help="input Seestar FITS file")
-    parser.add_argument("output", help="output PNG file (16-bit)")
+    parser.add_argument(
+        "input",
+        nargs="+",
+        help=(
+            "input FITS file, or (with --batch) multiple FITS files. "
+            "Without --batch, exactly one input + one output is required."
+        ),
+    )
+    parser.add_argument(
+        "output",
+        nargs="?",
+        default=None,
+        help=(
+            "output PNG file (single-mode). Ignored in --batch mode; "
+            "outputs land next to the inputs with .png suffix, or under "
+            "--output-dir when specified."
+        ),
+    )
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help=(
+            "process every positional arg as an input FITS. Each input "
+            "generates a matching .png next to it (or under --output-dir)."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="directory to place outputs in --batch mode (default: beside input).",
+    )
     parser.add_argument(
         "--profile",
         default=None,
@@ -243,6 +362,19 @@ def main(argv: list[str] | None = None) -> int:
         "--no-auto",
         action="store_true",
         help="disable auto-classify; use --profile or fall back to default",
+    )
+    parser.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        metavar="stage.param=value",
+        help=(
+            "override a single profile parameter without editing "
+            "profiles.py. Repeatable. Examples: "
+            "--override stretch.stretch=22 "
+            "--override curves.contrast=0.75 "
+            "--override 'curves.channel_gains=1.4,1.1,0.6'"
+        ),
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -256,7 +388,45 @@ def main(argv: list[str] | None = None) -> int:
     if selected is None and args.no_auto:
         selected = "default"
 
-    run(args.input, args.output, profile=selected, verbose=args.verbose)
+    if args.batch:
+        out_dir = Path(args.output_dir) if args.output_dir else None
+        if out_dir is not None:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        # In batch mode, `output` is ignored, and every positional slot
+        # (including the "output" slot) is treated as an input.
+        inputs = list(args.input)
+        if args.output is not None:
+            inputs.append(args.output)
+        failures = 0
+        for in_path in inputs:
+            src = Path(in_path)
+            dst = (out_dir or src.parent) / f"{src.stem}.png"
+            try:
+                _run_one(
+                    str(src),
+                    str(dst),
+                    profile=selected,
+                    overrides=args.override,
+                    verbose=args.verbose,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("failed on %s: %s", src, exc)
+                failures += 1
+        return 0 if failures == 0 else 1
+
+    # Single-file mode
+    if args.output is None or len(args.input) != 1:
+        parser.error(
+            "single-file mode needs exactly one input and one output; "
+            "use --batch for multiple inputs."
+        )
+    _run_one(
+        args.input[0],
+        args.output,
+        profile=selected,
+        overrides=args.override,
+        verbose=args.verbose,
+    )
     return 0
 
 

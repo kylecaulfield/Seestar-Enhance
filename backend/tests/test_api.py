@@ -1,4 +1,5 @@
 """Smoke tests for the HTTP API."""
+
 from __future__ import annotations
 
 import time
@@ -6,10 +7,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from app.main import app
 from astropy.io import fits
 from fastapi.testclient import TestClient
-
-from app.main import app
 
 
 @pytest.fixture

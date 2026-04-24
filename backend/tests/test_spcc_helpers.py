@@ -5,18 +5,18 @@ image and a tiny mock catalog — so no network, no bundled Parquet,
 and no real Seestar FITS is required. These tests pin the contract
 the Phase 4 fit will rely on.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
-from astropy.wcs import WCS
-
 from app.stages.spcc import (
     _catalog_in_fov,
     _cross_match,
     _detect_bright_stars,
     _measure_star_rgb,
 )
+from astropy.wcs import WCS
 
 
 def _make_image_with_stars(
@@ -32,7 +32,7 @@ def _make_image_with_stars(
         star_rgb = [(0.8, 0.8, 0.8)] * len(star_yx)
     # Stamp a 5x5 cross that peaks at the centre — enough for the
     # maximum-filter detector without needing scipy's gaussian.
-    for (y, x), (r, g, b) in zip(star_yx, star_rgb):
+    for (y, x), (r, g, b) in zip(star_yx, star_rgb, strict=False):
         for dy in range(-2, 3):
             for dx in range(-2, 3):
                 w = max(0.0, 1.0 - (abs(dy) + abs(dx)) * 0.25)
@@ -56,13 +56,12 @@ def _make_simple_wcs(
     w_obj.wcs.crval = [centre_radec[0], centre_radec[1]]
     w_obj.wcs.crpix = [w / 2.0 + 0.5, h / 2.0 + 0.5]
     deg_per_pix = arcsec_per_pix / 3600.0
-    w_obj.wcs.cd = np.array(
-        [[-deg_per_pix, 0.0], [0.0, deg_per_pix]], dtype=np.float64
-    )
+    w_obj.wcs.cd = np.array([[-deg_per_pix, 0.0], [0.0, deg_per_pix]], dtype=np.float64)
     return w_obj
 
 
 # ---------- _detect_bright_stars ----------
+
 
 def test_detect_finds_planted_stars() -> None:
     planted = [(40, 50), (100, 120), (160, 30)]
@@ -71,7 +70,7 @@ def test_detect_finds_planted_stars() -> None:
     assert found.shape[1] == 2
     # Each planted star should be detected within 2 px — the detector
     # may pick any of the 5 cross pixels as "the" local max.
-    for (py, px) in planted:
+    for py, px in planted:
         distances = np.hypot(found[:, 0] - py, found[:, 1] - px)
         assert distances.min() < 2.0, f"planted star at ({py},{px}) not found"
 
@@ -98,6 +97,7 @@ def test_detect_rejects_bad_args() -> None:
 
 
 # ---------- _catalog_in_fov ----------
+
 
 def test_fov_keeps_in_frame_and_drops_far_catalog() -> None:
     wcs = _make_simple_wcs((200, 200), centre_radec=(180.0, 0.0))
@@ -137,6 +137,7 @@ def test_fov_rejects_missing_columns() -> None:
 
 # ---------- _cross_match ----------
 
+
 def test_cross_match_pairs_nearby() -> None:
     img = np.array([[180.0, 0.0], [180.001, 0.001]], dtype=np.float64)
     cat = np.array([[180.000, 0.000], [45.0, -30.0], [180.002, 0.001]], dtype=np.float64)
@@ -165,6 +166,7 @@ def test_cross_match_empty_inputs() -> None:
 
 
 # ---------- _measure_star_rgb ----------
+
 
 def test_measure_star_rgb_recovers_hue() -> None:
     img = _make_image_with_stars(

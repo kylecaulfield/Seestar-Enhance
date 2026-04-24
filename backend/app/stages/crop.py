@@ -10,9 +10,8 @@ Convention: the crop is specified as a `(top, left, bottom, right)`
 box in pixel coordinates, matching numpy/PIL. Bottom / right may be
 negative, meaning "N pixels from the far edge".
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import numpy as np
 
@@ -21,8 +20,8 @@ def process(
     image: np.ndarray,
     top: int = 0,
     left: int = 0,
-    bottom: Optional[int] = None,
-    right: Optional[int] = None,
+    bottom: int | None = None,
+    right: int | None = None,
 ) -> np.ndarray:
     """Return a rectangular sub-image.
 

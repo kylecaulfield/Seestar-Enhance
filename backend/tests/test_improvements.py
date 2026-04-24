@@ -1,17 +1,17 @@
 """Tests for the v1.5 pipeline improvements:
 
-  - stages/crop.py: rectangular crop
-  - stages/bm3d_denoise.py: downsample_factor fast path
-  - stages/color.py: Mahalanobis WB + star-color protection
-  - stages/background.py: caller-supplied sky_mask
-  - stages/curves.py: star_preserve_percentile
-  - stages/stretch.py: "auto" black_percentile and stretch
+- stages/crop.py: rectangular crop
+- stages/bm3d_denoise.py: downsample_factor fast path
+- stages/color.py: Mahalanobis WB + star-color protection
+- stages/background.py: caller-supplied sky_mask
+- stages/curves.py: star_preserve_percentile
+- stages/stretch.py: "auto" black_percentile and stretch
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from app.stages import background, bm3d_denoise, color, crop, curves, stretch
 
 

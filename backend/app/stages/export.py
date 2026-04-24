@@ -3,15 +3,15 @@
 Uses pypng for the PNG writer because Pillow's high-level API does not
 support 16-bit-per-channel RGB output.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Union
 
 import numpy as np
 import png
 
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 
 def process(image: np.ndarray, path: PathLike) -> np.ndarray:

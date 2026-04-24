@@ -6,6 +6,7 @@ demosaic). Sharpening only the luma and adding the high-pass equally to
 all three channels keeps chroma intact while boosting edge contrast on
 brightness — standard astrophotography practice.
 """
+
 from __future__ import annotations
 
 import numpy as np

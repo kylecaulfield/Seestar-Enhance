@@ -11,20 +11,19 @@ dark is demosaicked the same way as the light before subtraction.
 Clamps the subtracted result to `[0, ∞)` so dark-current overshoot
 doesn't introduce negative values.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Union
 
 import numpy as np
 
-
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 
 def process(
     image: np.ndarray,
-    dark: Optional[np.ndarray] = None,
+    dark: np.ndarray | None = None,
     scale: float = 1.0,
 ) -> np.ndarray:
     """Subtract a master-dark image from the light.
@@ -50,11 +49,7 @@ def process(
     if dark is None:
         return image
     if dark.shape != image.shape:
-        raise ValueError(
-            f"dark shape {dark.shape} does not match light shape {image.shape}"
-        )
+        raise ValueError(f"dark shape {dark.shape} does not match light shape {image.shape}")
 
-    out = image.astype(np.float32, copy=False) - float(scale) * dark.astype(
-        np.float32, copy=False
-    )
+    out = image.astype(np.float32, copy=False) - float(scale) * dark.astype(np.float32, copy=False)
     return np.clip(out, 0.0, 1.0).astype(np.float32)

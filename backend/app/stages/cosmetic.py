@@ -14,6 +14,7 @@ outliers never reach arcsinh.
 Contract: pure transform on `(H, W, 3)` float32 in `[0, 1]`; never
 returns a pixel brighter than its input.
 """
+
 from __future__ import annotations
 
 import numpy as np

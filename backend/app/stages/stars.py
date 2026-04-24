@@ -29,15 +29,14 @@ Tradeoffs vs ML separation:
 For nebula targets this trade is a massive net win — community Seestar
 stacks routinely use StarNet for this exact reason.
 """
-from __future__ import annotations
 
-from typing import Tuple
+from __future__ import annotations
 
 import numpy as np
 from scipy.ndimage import median_filter
 
 
-def process(image: np.ndarray, radius: int = 7) -> Tuple[np.ndarray, np.ndarray]:
+def process(image: np.ndarray, radius: int = 7) -> tuple[np.ndarray, np.ndarray]:
     """Split an RGB image into (stars_only, starless).
 
     Parameters
@@ -90,9 +89,7 @@ def recombine(stars_only: np.ndarray, starless: np.ndarray) -> np.ndarray:
     addition would require a clip and would shift hues on bright stars.
     """
     if stars_only.shape != starless.shape:
-        raise ValueError(
-            f"shape mismatch: stars={stars_only.shape} starless={starless.shape}"
-        )
+        raise ValueError(f"shape mismatch: stars={stars_only.shape} starless={starless.shape}")
     s = np.clip(stars_only.astype(np.float32, copy=False), 0.0, 1.0)
     b = np.clip(starless.astype(np.float32, copy=False), 0.0, 1.0)
     return (1.0 - (1.0 - s) * (1.0 - b)).astype(np.float32)

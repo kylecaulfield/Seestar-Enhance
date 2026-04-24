@@ -22,13 +22,13 @@
    applied to each pixel first. Used to pre-compensate for known sensor
    quirks like the Seestar S50 IR leak into R.
 """
+
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
-
 
 # Seestar S50 CCM. Empirically-tuned (not factory-calibrated) to
 # compensate for:
@@ -101,8 +101,8 @@ def process(
     pre_stretch_chroma_smooth: float = 0.0,
     pre_stretch_chroma_lowpass: float = 0.0,
     mahalanobis_wb: bool = True,
-    star_protect_percentile: Optional[float] = 99.0,
-    ccm: Optional[Sequence[Sequence[float]]] = None,
+    star_protect_percentile: float | None = 99.0,
+    ccm: Sequence[Sequence[float]] | None = None,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")

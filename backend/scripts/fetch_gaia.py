@@ -33,14 +33,13 @@ Environment variables (all optional):
     GAIA_OUTPUT       — output path.
     GAIA_SOURCE       — "esa" | "vizier" | "auto" (default: auto).
 """
+
 from __future__ import annotations
 
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional
-
 
 _ADQL_TEMPLATE_ESA = """
 SELECT
@@ -66,26 +65,25 @@ _RA_BANDS = [(0.0, 90.0), (90.0, 180.0), (180.0, 270.0), (270.0, 360.0)]
 
 def fetch_esa(g_limit: float, use_async: bool = True):
     """Fetch from the ESA Gaia TAP service in four RA bands."""
-    from astroquery.gaia import Gaia
     from astropy.table import vstack
+    from astroquery.gaia import Gaia
 
     tables = []
     t0 = time.time()
     for lo, hi in _RA_BANDS:
         q = _ADQL_TEMPLATE_ESA.format(
-            g_limit=f"{g_limit:.2f}", ra_lo=lo, ra_hi=hi,
+            g_limit=f"{g_limit:.2f}",
+            ra_lo=lo,
+            ra_hi=hi,
         )
         print(f"ESA TAP: G<{g_limit}, RA [{lo:g},{hi:g}), async={use_async} ...")
         t = time.time()
-        job = (
-            Gaia.launch_job_async(q) if use_async
-            else Gaia.launch_job(q)
-        )
+        job = Gaia.launch_job_async(q) if use_async else Gaia.launch_job(q)
         r = job.get_results()
-        print(f"  band: {len(r):,} rows in {time.time()-t:.1f} s")
+        print(f"  band: {len(r):,} rows in {time.time() - t:.1f} s")
         tables.append(r)
     merged = vstack(tables)
-    print(f"  merged: {len(merged):,} rows in {time.time()-t0:.1f} s total")
+    print(f"  merged: {len(merged):,} rows in {time.time() - t0:.1f} s total")
     return merged
 
 
@@ -155,15 +153,9 @@ def save_parquet(table, path: Path) -> None:
     arrays = {
         "ra": pa.array(np.asarray(table["ra"], dtype=np.float32)),
         "dec": pa.array(np.asarray(table["dec"], dtype=np.float32)),
-        "phot_g_mean_mag": pa.array(
-            np.asarray(table["phot_g_mean_mag"], dtype=np.float32)
-        ),
-        "phot_bp_mean_mag": pa.array(
-            np.asarray(table["phot_bp_mean_mag"], dtype=np.float32)
-        ),
-        "phot_rp_mean_mag": pa.array(
-            np.asarray(table["phot_rp_mean_mag"], dtype=np.float32)
-        ),
+        "phot_g_mean_mag": pa.array(np.asarray(table["phot_g_mean_mag"], dtype=np.float32)),
+        "phot_bp_mean_mag": pa.array(np.asarray(table["phot_bp_mean_mag"], dtype=np.float32)),
+        "phot_rp_mean_mag": pa.array(np.asarray(table["phot_rp_mean_mag"], dtype=np.float32)),
     }
     arrow_table = pa.Table.from_pydict(arrays)
     # Brotli gets ~25% better ratio than snappy on numeric data.
@@ -179,7 +171,7 @@ def save_parquet(table, path: Path) -> None:
     print(f"Wrote {path} ({size_mb:.2f} MB, {len(arrow_table):,} rows)")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     g_limit = float(os.environ.get("GAIA_G_LIMIT", "12.0"))
     source = os.environ.get("GAIA_SOURCE", "auto")
     out_path = Path(

@@ -7,6 +7,7 @@ test proves the fit finds identity when the image already matches the
 catalogue; the "injected CCM" test proves SPCC recovers the inverse
 of a known miscalibration.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,9 +16,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from astropy.wcs import WCS
-
 from app.stages import spcc
+from astropy.wcs import WCS
 
 
 def _make_wcs(
@@ -31,9 +31,7 @@ def _make_wcs(
     w_obj.wcs.crval = [centre_radec[0], centre_radec[1]]
     w_obj.wcs.crpix = [w / 2.0 + 0.5, h / 2.0 + 0.5]
     deg_per_pix = arcsec_per_pix / 3600.0
-    w_obj.wcs.cd = np.array(
-        [[-deg_per_pix, 0.0], [0.0, deg_per_pix]], dtype=np.float64
-    )
+    w_obj.wcs.cd = np.array([[-deg_per_pix, 0.0], [0.0, deg_per_pix]], dtype=np.float64)
     return w_obj
 
 
@@ -43,7 +41,7 @@ def _plant_stars(
     rgbs: list[tuple[float, float, float]],
     radius: int = 2,
 ) -> None:
-    for (y, x), (r, g, b) in zip(yx, rgbs):
+    for (y, x), (r, g, b) in zip(yx, rgbs, strict=False):
         for dy in range(-radius, radius + 1):
             for dx in range(-radius, radius + 1):
                 w = max(0.0, 1.0 - (abs(dy) + abs(dx)) * 0.35)
@@ -131,7 +129,7 @@ def _build_scene(
         # Scale up so the stars read above the background noise.
         planted_rgbs.append(tuple(0.5 + 0.4 * np.asarray(measured)))  # type: ignore[arg-type]
 
-    _plant_stars(img, list(zip(ys.tolist(), xs.tolist())), planted_rgbs, radius=2)
+    _plant_stars(img, list(zip(ys.tolist(), xs.tolist(), strict=False)), planted_rgbs, radius=2)
 
     # Build the WCS and convert each planted pixel to RA/Dec.
     wcs = _make_wcs((image_size, image_size))
@@ -189,9 +187,7 @@ def test_spcc_fit_moves_pixels_under_miscalibration(tmp_path: Path) -> None:
     bit-identical to the input, so SPCC's fit+apply path is wired
     and firing."""
     injected = np.diag([0.7, 1.0, 1.3]).astype(np.float64)
-    img, wcs, cat, _expected = _build_scene(
-        tmp_path, n_stars=60, image_ccm=injected
-    )
+    img, wcs, cat, _expected = _build_scene(tmp_path, n_stars=60, image_ccm=injected)
     # Disable luma-weighting so the synthetic sky pixels (low luma) also
     # get calibrated; luma_weighted=True is the right default for real
     # astro frames but makes this whole-frame diff test insensitive.
@@ -279,13 +275,21 @@ def test_luma_weighted_spares_sky_pixels(tmp_path: Path) -> None:
     img, wcs, cat, _ = _build_scene(tmp_path, n_stars=60, image_ccm=injected)
 
     out_weighted = spcc.process(
-        img, wcs=wcs, catalog_path=cat,
-        min_matches=20, n_detect=120, tol_arcsec=5.0,
+        img,
+        wcs=wcs,
+        catalog_path=cat,
+        min_matches=20,
+        n_detect=120,
+        tol_arcsec=5.0,
         luma_weighted=True,
     )
     out_unweighted = spcc.process(
-        img, wcs=wcs, catalog_path=cat,
-        min_matches=20, n_detect=120, tol_arcsec=5.0,
+        img,
+        wcs=wcs,
+        catalog_path=cat,
+        min_matches=20,
+        n_detect=120,
+        tol_arcsec=5.0,
         luma_weighted=False,
     )
     # Sample the darkest pixels (bottom 10% luma): weighted version

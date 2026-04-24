@@ -4,11 +4,11 @@ Covers the new stages (cosmetic, clahe, deconv), the new chroma-edge-
 aware option in bm3d_denoise, and the pipeline wiring that threads the
 new opt-in params through.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from app.stages import bm3d_denoise, clahe, cosmetic, deconv
 
 
@@ -20,6 +20,7 @@ def rgb() -> np.ndarray:
 
 
 # ---------- cosmetic ----------
+
 
 def test_cosmetic_removes_single_hot_pixel(rgb: np.ndarray) -> None:
     img = rgb.copy()
@@ -45,6 +46,7 @@ def test_cosmetic_rejects_bad_shape() -> None:
 
 
 # ---------- clahe ----------
+
 
 def test_clahe_lifts_local_contrast(rgb: np.ndarray) -> None:
     # Build an image with a mid-brightness gradient. CLAHE should
@@ -77,11 +79,13 @@ def test_clahe_zero_blend_is_identity(rgb: np.ndarray) -> None:
 
 # ---------- deconv ----------
 
+
 def test_deconv_tightens_a_blurred_star() -> None:
     # Synthesise a blurred star; deconv should narrow the core.
     img = np.zeros((64, 64, 3), dtype=np.float32)
     img[32, 32] = 1.0
     from scipy.ndimage import gaussian_filter
+
     for c in range(3):
         img[..., c] = gaussian_filter(img[..., c], sigma=2.0)
     out = deconv.process(img, psf_sigma=1.5, iterations=10, psf_size=11)
@@ -95,6 +99,7 @@ def test_deconv_rejects_bad_iterations(rgb: np.ndarray) -> None:
 
 
 # ---------- bm3d chroma edge-aware ----------
+
 
 def test_chroma_edge_aware_preserves_luma_edges() -> None:
     # Left half = red, right half = blue. With edge-aware chroma, the

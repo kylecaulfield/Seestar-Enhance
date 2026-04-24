@@ -1,11 +1,11 @@
 """Tests for backend.app.stages.io_fits."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 import numpy as np
 import pytest
-
 from app.stages.io_fits import load_fits, save_preview_png
 
 SAMPLES_DIR = Path(__file__).resolve().parents[2] / "samples"
@@ -14,10 +14,7 @@ SAMPLES_DIR = Path(__file__).resolve().parents[2] / "samples"
 def _sample_files() -> list[Path]:
     if not SAMPLES_DIR.is_dir():
         return []
-    return sorted(
-        p for p in SAMPLES_DIR.iterdir()
-        if p.suffix.lower() in {".fit", ".fits", ".fts"}
-    )
+    return sorted(p for p in SAMPLES_DIR.iterdir() if p.suffix.lower() in {".fit", ".fits", ".fts"})
 
 
 SAMPLE_FILES = _sample_files()

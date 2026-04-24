@@ -17,12 +17,13 @@ lands, bump these numbers up for the starless path.
 Ordering by aggressiveness (most -> least): nebula > galaxy > cluster.
 Clusters are almost entirely stars, so every knob is dialed down.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
-StageParams = Dict[str, Any]
-Profile = Dict[str, StageParams]
+StageParams = dict[str, Any]
+Profile = dict[str, StageParams]
 
 
 # Safe middle-of-the-road profile. Used as the `default` and as a base for
@@ -499,7 +500,7 @@ CLUSTER: Profile = {
 }
 
 
-PROFILES: Dict[str, Profile] = {
+PROFILES: dict[str, Profile] = {
     "default": DEFAULT,
     "nebula": NEBULA,
     "nebula_wide": NEBULA_WIDE,
@@ -512,7 +513,5 @@ PROFILES: Dict[str, Profile] = {
 
 def get(name: str) -> Profile:
     if name not in PROFILES:
-        raise KeyError(
-            f"unknown profile {name!r}; choose from {sorted(PROFILES)}"
-        )
+        raise KeyError(f"unknown profile {name!r}; choose from {sorted(PROFILES)}")
     return PROFILES[name]

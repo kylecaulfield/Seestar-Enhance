@@ -1,4 +1,5 @@
 """Tests for individual pipeline stages."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,7 +7,6 @@ from pathlib import Path
 import numpy as np
 import png
 import pytest
-
 from app.stages import (
     background,
     bm3d_denoise,
@@ -51,11 +51,7 @@ def test_color_balances_mid_medians(sample_rgb: np.ndarray) -> None:
     lo, hi = np.percentile(luma, [40, 80])
     mid = (luma >= lo) & (luma <= hi)
     meds = np.array([float(np.median(out[..., c][mid])) for c in range(3)])
-    spread_before = (
-        np.array(
-            [float(np.median(sample_rgb[..., c][mid])) for c in range(3)]
-        ).ptp()
-    )
+    spread_before = np.array([float(np.median(sample_rgb[..., c][mid])) for c in range(3)]).ptp()
     assert meds.ptp() <= spread_before + 1e-3
 
 

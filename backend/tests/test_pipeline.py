@@ -1,4 +1,5 @@
 """End-to-end pipeline tests."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,9 +7,8 @@ from pathlib import Path
 import numpy as np
 import png
 import pytest
-from astropy.io import fits
-
 from app.pipeline import run
+from astropy.io import fits
 
 
 @pytest.fixture
@@ -48,8 +48,16 @@ def test_pipeline_progress_callback(synthetic_fits: Path, tmp_path: Path) -> Non
 
     stages_seen = [s for s, _ in events]
     for expected in (
-        "load", "classify", "background", "color", "stretch",
-        "bm3d_denoise", "sharpen", "curves", "export", "done",
+        "load",
+        "classify",
+        "background",
+        "color",
+        "stretch",
+        "bm3d_denoise",
+        "sharpen",
+        "curves",
+        "export",
+        "done",
     ):
         assert expected in stages_seen, f"missing progress for {expected}"
 

@@ -16,6 +16,7 @@ thread pool. This is deliberately unpretentious — no Celery, no Redis;
 v1 is a single process on a single box. See BACKLOG.md for the async
 upgrade path.
 """
+
 from __future__ import annotations
 
 import logging
@@ -28,7 +29,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile
@@ -79,14 +79,14 @@ class Job:
     status: str = "queued"  # queued | running | done | error
     stage: str = "queued"
     progress: float = 0.0
-    error: Optional[str] = None
+    error: str | None = None
     input_path: Path = field(default_factory=Path)
     output_path: Path = field(default_factory=Path)
     before_path: Path = field(default_factory=Path)
-    classification: Optional[str] = None
+    classification: str | None = None
     # Unix timestamp when the job reached a terminal state (done/error).
     # None while queued/running. Used by the reaper to enforce the TTL.
-    terminated_at: Optional[float] = None
+    terminated_at: float | None = None
 
 
 _JOBS: dict[str, Job] = {}
@@ -224,7 +224,7 @@ def _reaper_loop(stop_event: threading.Event) -> None:
 
 
 _REAPER_STOP = threading.Event()
-_REAPER_THREAD: Optional[threading.Thread] = None
+_REAPER_THREAD: threading.Thread | None = None
 
 
 def _start_reaper() -> None:
@@ -273,9 +273,7 @@ async def process_endpoint(file: UploadFile) -> dict[str, str]:
 
     name_lower = file.filename.lower()
     if not (
-        name_lower.endswith(".fit")
-        or name_lower.endswith(".fits")
-        or name_lower.endswith(".fts")
+        name_lower.endswith(".fit") or name_lower.endswith(".fits") or name_lower.endswith(".fts")
     ):
         raise HTTPException(status_code=400, detail="expected a .fit/.fits/.fts file")
 
@@ -331,9 +329,7 @@ async def process_endpoint(file: UploadFile) -> dict[str, str]:
                     f.write(chunk)
             if not magic_ok:
                 # Stream ended before we saw enough bytes.
-                raise HTTPException(
-                    status_code=400, detail="file is too small to be a FITS image"
-                )
+                raise HTTPException(status_code=400, detail="file is too small to be a FITS image")
     except HTTPException:
         shutil.rmtree(job_dir, ignore_errors=True)
         with _JOBS_LOCK:

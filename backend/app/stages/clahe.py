@@ -9,6 +9,7 @@ We apply CLAHE to the luma only and reattach the original chroma, so
 there's no coloured halo on edges. The contract matches the rest of
 the pipeline: in/out are `(H, W, 3)` float32 in `[0, 1]`.
 """
+
 from __future__ import annotations
 
 import numpy as np

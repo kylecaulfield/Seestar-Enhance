@@ -385,7 +385,13 @@ completely.
 
 ```sh
 cd backend
-python -m app.pipeline <input.fits> <output.png> [--profile NAME] [--no-auto] [-v]
+python -m app.pipeline <input.fits> <output.png> \
+    [--profile NAME] [--no-auto] \
+    [--override stage.param=value]... \
+    [-v]
+
+# Batch mode — multiple inputs, one .png per input.
+python -m app.pipeline --batch <input.fits> ... [--output-dir DIR] [-v]
 ```
 
 By default the profile is picked automatically by the classifier. Pass
@@ -405,6 +411,51 @@ python -m app.pipeline ../samples/cluster.fits ../samples/outputs/cluster.png --
 ```
 
 `-v` prints per-stage progress to stderr. Exit code `0` on success.
+
+### `--override`
+
+Tune a single profile parameter for one run without editing
+`profiles.py`. Repeatable; each override is `stage.param=value`. The
+value is coerced to `int`, `float`, `bool` (`true`/`false`), `None`,
+or left as a string, and a comma-separated value becomes a tuple.
+
+```sh
+# One-off stretch tweak
+python -m app.pipeline input.fit output.png \
+    --override stretch.stretch=22 \
+    --override curves.contrast=0.75
+
+# Channel gains need quoting so the shell doesn't split on comma
+python -m app.pipeline input.fit output.png \
+    --override 'curves.channel_gains=1.4,1.1,0.6'
+
+# Disable a stage for one run
+python -m app.pipeline input.fit output.png --override cosmetic=None
+```
+
+Overrides apply to the resolved profile (auto-classified or
+`--profile`) without mutating the shared registry.
+
+### `--batch`
+
+Process many FITS files in one invocation. Each input produces a
+`.png` with the same stem next to it, or under `--output-dir`:
+
+```sh
+# Output next to each input
+python -m app.pipeline --batch samples/*.fit
+
+# All outputs to one directory
+python -m app.pipeline --batch samples/*.fit --output-dir samples/outputs
+
+# Profile + overrides apply to every input in the batch
+python -m app.pipeline --batch samples/*.fit \
+    --profile nebula_wide \
+    --override stretch.stretch=25
+```
+
+Per-file failures are logged and don't abort the batch; exit code is
+`0` if all succeeded, `1` if any failed.
 
 ## Backend API
 
@@ -454,6 +505,28 @@ The suite covers:
   404 / 400 error paths.
 
 Tests that consume real sample files auto-skip when `samples/` is empty.
+
+### Lint, format, and type-check
+
+Ruff (lint + format) and mypy run on every push and pull request via
+`.github/workflows/ci.yml`. Run them locally before pushing:
+
+```sh
+cd backend
+ruff check .              # lint
+ruff format --check .     # format (add `--fix` to auto-apply)
+mypy app                  # type check (advisory for now)
+```
+
+Pre-commit hooks mirror the CI checks. Opt in once per clone:
+
+```sh
+pip install pre-commit
+pre-commit install
+```
+
+After that, every `git commit` runs ruff + format + a few file-hygiene
+hooks and blocks the commit on failure.
 
 ### Golden-image regression tests
 

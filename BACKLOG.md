@@ -344,8 +344,11 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 - [ ] Let profiles override only a subset of a parent profile (current
   implementation uses `{**DEFAULT, "stretch": {...}}` which replaces
   the whole sub-dict — fine for now, awkward as profiles grow).
-- [ ] Expose `--override stage.param=value` flags on the CLI for
-  one-off experimentation without editing `profiles.py`.
+- [x] **`--override stage.param=value` flag on the CLI** — _Shipped._
+  `python -m app.pipeline ... --override stretch.stretch=22 --override
+  'curves.channel_gains=1.4,1.1,0.6'` patches the resolved profile
+  for one run without mutating the shared registry. Values coerce to
+  int / float / bool / None / tuple automatically.
 
 ## Backend API
 
@@ -414,17 +417,18 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 
 ## DevOps / CI
 
-- [~] **GitHub Actions workflow: `pytest` + `ruff` + `mypy` on every
-  PR.** — _Partially shipped in `e54ac8c`._ `pytest` and `ruff`
-  (lint + format check) run on every push and pull request via
-  `.github/workflows/ci.yml`. Ruff findings are `continue-on-error`
-  until the 74-finding baseline is cleaned up. `mypy` still open.
-- [ ] **Ruff baseline cleanup** — 74 findings flagged on the initial
-  `ruff check`. Mostly `UP` (modernize annotations / imports) and
-  `I` (import ordering), with a few `B` and one `E741`. Clearing
-  the baseline lets CI flip `continue-on-error: false` so new
-  lint debt can't land.
-- [ ] Pre-commit hooks: `ruff format`, `ruff check`, trailing whitespace.
+- [x] **GitHub Actions workflow: `pytest` + `ruff` + `mypy` on every
+  PR.** — _Shipped._ `pytest`, `ruff check`, and `ruff format --check`
+  hard-fail the job; `mypy app` runs but is `continue-on-error` until
+  type annotations land. Workflow at `.github/workflows/ci.yml`.
+- [x] **Ruff baseline cleanup** — _Shipped._ 74 findings auto-fixed
+  or hand-cleaned down to zero. `continue-on-error: true` removed from
+  the ruff CI steps, so new lint debt can't land.
+- [x] **Pre-commit hooks** — _Shipped._ `.pre-commit-config.yaml`
+  runs `ruff check --fix`, `ruff format`, trailing-whitespace,
+  end-of-file-fixer, YAML/TOML validity, and a 2 MB file-size guard
+  (exception documented for the Gaia parquet). Opt-in per clone
+  with `pre-commit install`.
 - [ ] **Git LFS for `gaia_bright.parquet`** — the full-sky catalog
   is 80 MB, above GitHub's 50 MB soft limit. The file pushes fine
   today but GitHub warns on every push. Migrating the single file
@@ -466,6 +470,8 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
   eVscope) — mostly a matter of reading their header conventions.
 - [ ] Offer a grayscale pipeline path that skips demosaic and color.
 - [ ] Export to TIFF and FITS in addition to PNG.
-- [ ] Batch mode on the CLI: `python -m app.pipeline --batch samples/*.fits`
-  writes matching outputs under `samples/outputs/`.
+- [x] **Batch mode on the CLI** — _Shipped._ `python -m app.pipeline
+  --batch samples/*.fit` writes a matching `.png` next to each input,
+  or under `--output-dir` when supplied. Per-file failures are logged
+  but don't abort the batch.
 - [ ] Plate solving integration (astrometry.net) so outputs are WCS-stamped.

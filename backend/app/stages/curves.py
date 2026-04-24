@@ -20,9 +20,10 @@ stack. Defaults to (1, 1, 1) — no change.
     construction — a pure-red pixel stays pure red, just more
     saturated. What PixInsight / Siril / Photoshop call "saturation".
 """
+
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 from skimage.color import hsv2rgb, rgb2hsv
@@ -67,8 +68,8 @@ def process(
     image: np.ndarray,
     contrast: float = 0.6,
     saturation: float = 1.2,
-    star_preserve_percentile: Optional[float] = 99.0,
-    channel_gains: Optional[Sequence[float]] = None,
+    star_preserve_percentile: float | None = 99.0,
+    channel_gains: Sequence[float] | None = None,
     saturation_mode: str = "linear",
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
@@ -83,9 +84,7 @@ def process(
     # cast across the entire frame.
     if channel_gains is not None:
         if len(channel_gains) != 3:
-            raise ValueError(
-                f"channel_gains must have 3 values, got {len(channel_gains)}"
-            )
+            raise ValueError(f"channel_gains must have 3 values, got {len(channel_gains)}")
         luma = img.mean(axis=-1, keepdims=True)  # (H, W, 1) in [0,1]
         gains = np.asarray(channel_gains, dtype=np.float32)[None, None, :]
         # Luma-weight: dark sky pixels stay neutral (no pink cast in sky).
@@ -104,9 +103,7 @@ def process(
         img = np.clip(img * effective, 0.0, 1.0).astype(np.float32)
 
     if saturation_mode not in ("linear", "hsv"):
-        raise ValueError(
-            f"saturation_mode must be 'linear' or 'hsv', got {saturation_mode!r}"
-        )
+        raise ValueError(f"saturation_mode must be 'linear' or 'hsv', got {saturation_mode!r}")
 
     luma = img.mean(axis=-1, keepdims=True)
     if star_preserve_percentile is not None and saturation != 1.0:

@@ -12,10 +12,10 @@ Planned implementation sketch (do not enable in v1):
     - blend seams with a cosine window
     - return float32 RGB in [0, 1]
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -23,7 +23,7 @@ import numpy as np
 # TODO(v2): accept `model_path` and load an ONNX session lazily.
 def process(
     image: np.ndarray,
-    model_path: Optional[Path] = None,
+    model_path: Path | None = None,
     tile_size: int = 512,
     overlap: int = 32,
     strength: float = 1.0,

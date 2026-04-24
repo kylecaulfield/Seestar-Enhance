@@ -18,18 +18,18 @@ what v2 SPCC (phase 4) will use to project the Gaia catalog onto the
 image plane. When the header has no usable WCS, the second element is
 `None` and downstream code is expected to skip the SPCC branch.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Tuple, Union
 
 import numpy as np
-from PIL import Image
 from astropy.io import fits
 from astropy.wcs import WCS
 from colour_demosaicing import demosaicing_CFA_Bayer_Malvar2004
+from PIL import Image
 
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 _VALID_BAYER_PATTERNS = {"RGGB", "BGGR", "GRBG", "GBRG"}
 
@@ -157,7 +157,7 @@ def _header_has_wcs(header: fits.Header) -> bool:
     return all(k in header for k in required)
 
 
-def _parse_wcs(header: fits.Header) -> Optional[WCS]:
+def _parse_wcs(header: fits.Header) -> WCS | None:
     """Construct an astropy WCS from the header if it looks valid.
 
     Swallows the astropy parser's warnings/exceptions because a bad
@@ -193,7 +193,7 @@ def _parse_wcs(header: fits.Header) -> Optional[WCS]:
     return wcs
 
 
-def _read_fits_hdu(path: PathLike) -> Tuple[np.ndarray, fits.Header]:
+def _read_fits_hdu(path: PathLike) -> tuple[np.ndarray, fits.Header]:
     """Open the FITS file, pick the first HDU with image data, return
     (data_array, header). Shared by `load_fits` and `load_fits_with_wcs`
     so both entry points see identical pixels."""
@@ -221,9 +221,7 @@ def _data_to_rgb(data: np.ndarray, header: fits.Header) -> np.ndarray:
     if data.ndim == 3 and data.shape[-1] in (3, 4):
         return _to_float01(data[..., :3], header)
     if data.ndim != 2:
-        raise ValueError(
-            f"Unsupported FITS data shape {data.shape}; expected 2D Bayer mosaic"
-        )
+        raise ValueError(f"Unsupported FITS data shape {data.shape}; expected 2D Bayer mosaic")
     pattern = _detect_bayer_pattern(header)
     mono = _to_float01(data, header)
     rgb = demosaicing_CFA_Bayer_Malvar2004(mono, pattern=pattern)
@@ -245,7 +243,7 @@ def load_fits(path: PathLike) -> np.ndarray:
 
 def load_fits_with_wcs(
     path: PathLike,
-) -> Tuple[np.ndarray, Optional[WCS]]:
+) -> tuple[np.ndarray, WCS | None]:
     """Load a Seestar FITS file and return `(image, wcs_or_none)`.
 
     The image contract is the same as `load_fits`: float32 `(H, W, 3)`

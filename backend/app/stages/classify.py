@@ -22,6 +22,7 @@ Thresholds are tuned empirically on the three Seestar samples and are
 intentionally coarse — the goal is to pick a profile, not to replace a
 real classifier.
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,8 +65,8 @@ _BRIGHT_THRESH = 0.05  # on pre-stretched luma (lower = catches faint Ha)
 _NEBULA_LARGEST_FRAC = 0.10
 _CLUSTER_STAR_DENSITY = 1300.0
 _CLUSTER_MAX_SKY_MEDIAN = 0.03  # above this, diffuse emission is present
-_GALAXY_MIN_SKY_MEDIAN = 0.03   # galaxy halos lift median above "dark sky"
-_GALAXY_MAX_SKY_MEDIAN = 0.08   # but not as high as nebula diffuse median
+_GALAXY_MIN_SKY_MEDIAN = 0.03  # galaxy halos lift median above "dark sky"
+_GALAXY_MAX_SKY_MEDIAN = 0.08  # but not as high as nebula diffuse median
 # largest_bright_fraction above which the target fills most of the
 # frame (Rosette, Heart/Soul, etc.). SPCC can't help here because
 # every bright region is contaminated by nebula, and the sky-crush
@@ -73,10 +74,10 @@ _GALAXY_MAX_SKY_MEDIAN = 0.08   # but not as high as nebula diffuse median
 # `nebula_dominant` profile, which skips SPCC and runs the static
 # Seestar CCM as the sensor-bias baseline.
 _DOMINANT_NEBULA_FRAC = 0.60
-_FILAMENT_ELONGATION = 0.85     # elongation above which a bright region is
-                                # filamentary (Veil ≈ 0.9, M92 core ≈ 0.3).
-_WIDE_NEBULA_FRAC = 0.20        # largest-bright-fraction above which the
-                                # target is a wide diffuse nebula (Rosette).
+_FILAMENT_ELONGATION = 0.85  # elongation above which a bright region is
+# filamentary (Veil ≈ 0.9, M92 core ≈ 0.3).
+_WIDE_NEBULA_FRAC = 0.20  # largest-bright-fraction above which the
+# target is a wide diffuse nebula (Rosette).
 
 
 def _prestretch(luma: np.ndarray) -> np.ndarray:
@@ -149,8 +150,10 @@ def _metrics(image: np.ndarray) -> ClassifyMetrics:
                 dy = ys - y_c
                 dx = xs - x_c
                 cov = np.array(
-                    [[float((dy * dy).mean()), float((dy * dx).mean())],
-                     [float((dy * dx).mean()), float((dx * dx).mean())]],
+                    [
+                        [float((dy * dy).mean()), float((dy * dx).mean())],
+                        [float((dy * dx).mean()), float((dx * dx).mean())],
+                    ],
                     dtype=np.float64,
                 )
                 w_eig = np.linalg.eigvalsh(cov)

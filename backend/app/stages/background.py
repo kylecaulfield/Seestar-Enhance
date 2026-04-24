@@ -11,9 +11,8 @@ hoping sigma-clipping can find the sky on its own for frames where the
 subject dominates the histogram (dense star clusters, tight galaxy
 framings).
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import numpy as np
 from scipy.interpolate import RBFInterpolator
@@ -43,7 +42,7 @@ def _fit_channel(
     iters: int,
     smoothing: float,
     downscale: int,
-    sky_mask: Optional[np.ndarray] = None,
+    sky_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     h, w = channel.shape
     ys = np.linspace(0, h - 1, grid, dtype=np.float32)
@@ -95,7 +94,7 @@ def process(
     iters: int = 5,
     smoothing: float = 1.0,
     downscale: int = 8,
-    sky_mask: Optional[np.ndarray] = None,
+    sky_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"expected (H, W, 3), got {image.shape}")

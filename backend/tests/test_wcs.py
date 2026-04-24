@@ -13,16 +13,15 @@
 Sample-using tests auto-skip when `samples/` is empty so the suite
 stays green in environments that don't ship the real frames.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 
 import numpy as np
 import pytest
-from astropy.io import fits
-
 from app.stages.io_fits import _parse_wcs, load_fits_with_wcs
-
+from astropy.io import fits
 
 _SAMPLES = Path(__file__).resolve().parents[2] / "samples"
 _SEESTAR_SAMPLE = _SAMPLES / "NGC 6888.fit"

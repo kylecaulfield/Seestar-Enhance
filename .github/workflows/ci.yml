@@ -34,23 +34,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff
+          pip install ruff mypy
 
-      # `ruff check` is advisory while the codebase hasn't been
-      # linted through yet — failures surface as an annotation but
-      # don't block the job. Flip to hard-fail once the initial
-      # cleanup pass lands.
       - name: Ruff lint
-        continue-on-error: true
         run: ruff check .
 
       - name: Ruff format check
-        continue-on-error: true
         run: ruff format --check .
+
+      # mypy is advisory for now — the codebase has no type-annotation
+      # baseline yet. Flip to hard-fail once annotations are filled in
+      # and the initial noise is triaged.
+      - name: mypy
+        continue-on-error: true
+        run: mypy app
 
       # Pytest runs from backend/ per the pyproject.toml testpaths.
       # Golden-image tests auto-skip if the samples / catalog bundle
       # aren't present, so a clean checkout without LFS still runs
-      # the 87 non-golden tests.
+      # the 110 non-golden tests.
       - name: Pytest
         run: pytest -q --durations=10

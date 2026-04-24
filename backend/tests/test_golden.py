@@ -17,6 +17,7 @@ regressions too subtle to show at that resolution are below the
 noise floor of the pipeline anyway (BM3D has its own stochasticity
 even with seeds).
 """
+
 from __future__ import annotations
 
 import os
@@ -24,9 +25,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PIL import Image
-
 from app import pipeline
+from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SAMPLES_DIR = REPO_ROOT / "samples"
@@ -70,9 +70,7 @@ def _ssim(a: np.ndarray, b: np.ndarray) -> float:
     """Structural similarity on RGB arrays (channel_axis=-1)."""
     from skimage.metrics import structural_similarity as ssim
 
-    return float(
-        ssim(a, b, channel_axis=-1, data_range=255)
-    )
+    return float(ssim(a, b, channel_axis=-1, data_range=255))
 
 
 def _run_and_thumb(sample_path: Path, tmp_path: Path) -> np.ndarray:
@@ -83,7 +81,9 @@ def _run_and_thumb(sample_path: Path, tmp_path: Path) -> np.ndarray:
 
 @pytest.mark.parametrize("fits_name,tag", SAMPLES, ids=[t for _, t in SAMPLES])
 def test_golden_matches(
-    fits_name: str, tag: str, tmp_path: Path,
+    fits_name: str,
+    tag: str,
+    tmp_path: Path,
 ) -> None:
     fits_path = SAMPLES_DIR / fits_name
     if not fits_path.exists():
@@ -101,17 +101,13 @@ def test_golden_matches(
         pytest.skip(f"regenerated {golden_path}")
 
     if not golden_path.exists():
-        pytest.skip(
-            f"golden {golden_path} missing. Set REGEN_GOLDEN=1 to create it."
-        )
+        pytest.skip(f"golden {golden_path} missing. Set REGEN_GOLDEN=1 to create it.")
 
     expected = np.asarray(Image.open(golden_path).convert("RGB"), dtype=np.uint8)
 
     # Shape guard — if the pipeline somehow changes output aspect ratio,
     # SSIM doesn't apply.
-    assert actual.shape == expected.shape, (
-        f"{tag}: shape {actual.shape} vs golden {expected.shape}"
-    )
+    assert actual.shape == expected.shape, f"{tag}: shape {actual.shape} vs golden {expected.shape}"
 
     score = _ssim(actual, expected)
     assert score >= SSIM_THRESHOLD, (

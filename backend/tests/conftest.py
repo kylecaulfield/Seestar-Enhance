@@ -1,4 +1,5 @@
 """Shared pytest fixtures for stage tests."""
+
 from __future__ import annotations
 
 import numpy as np

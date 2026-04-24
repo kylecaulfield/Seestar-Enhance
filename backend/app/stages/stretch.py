@@ -21,13 +21,12 @@ with dim targets get more lift and frames with bright targets stay
 conservative. `black_percentile` can also be "auto" in which case it
 maps to the knee of the luma histogram (low-luma median + 1.5 MAD).
 """
-from __future__ import annotations
 
-from typing import Union
+from __future__ import annotations
 
 import numpy as np
 
-Floatable = Union[float, str]
+Floatable = float | str
 
 
 def _auto_black_percentile(luma: np.ndarray) -> float:

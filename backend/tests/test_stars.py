@@ -1,9 +1,9 @@
 """Tests for classical star/starless separation."""
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from app.stages import stars
 
 

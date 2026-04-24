@@ -1,4 +1,5 @@
 """Bundled data files (Gaia DR3 subset)."""
+
 from __future__ import annotations
 
 from pathlib import Path
