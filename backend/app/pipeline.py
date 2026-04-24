@@ -316,6 +316,111 @@ def _run_one(
         profiles.PROFILES[profile] = original
 
 
+def _resolve_batch_jobs(requested: int, n_work: int) -> int:
+    """Clamp `--jobs` to [1, min(os.cpu_count(), n_work)].
+
+    `--jobs 0` (or any non-positive value) asks for one-per-core. We
+    cap at the number of inputs so we don't spin up empty workers.
+    """
+    import os as _os
+
+    cpu = _os.cpu_count() or 1
+    if requested <= 0:
+        return max(1, min(cpu, n_work))
+    return max(1, min(requested, n_work))
+
+
+# Module-level entry for ProcessPoolExecutor — cloudpickle doesn't like
+# nested closures, so we need a proper function.
+def _batch_worker(args: tuple) -> tuple[str, str | None]:
+    src, dst, profile, overrides, verbose = args
+    try:
+        _run_one(src, dst, profile=profile, overrides=overrides, verbose=verbose)
+        return src, None
+    except Exception as exc:  # noqa: BLE001
+        return src, f"{type(exc).__name__}: {exc}"
+
+
+def _blas_thread_env(n_jobs: int) -> dict[str, str]:
+    """Env-var dict that throttles BLAS threads per worker process.
+
+    numpy/scipy wheels autothread across all cores by default. Without
+    throttling, `N_jobs` worker processes × `N_cpu` BLAS threads each
+    = N*N oversubscription, which burns context-switch time instead of
+    making forward progress. Dividing cores across workers removes the
+    overlap. Per-process BLAS thread budget is `max(1, cpu // n_jobs)`.
+
+    The vars are: OMP (OpenMP), MKL (Intel MKL — used by conda numpy
+    and by some pip numpy wheels), OPENBLAS (most pip numpy wheels),
+    NUMEXPR (used by some downstream libs), VECLIB (Apple Accelerate).
+    """
+    import os as _os
+
+    cpu = _os.cpu_count() or 1
+    per_worker = max(1, cpu // max(n_jobs, 1))
+    val = str(per_worker)
+    return {
+        "OMP_NUM_THREADS": val,
+        "MKL_NUM_THREADS": val,
+        "OPENBLAS_NUM_THREADS": val,
+        "NUMEXPR_NUM_THREADS": val,
+        "VECLIB_MAXIMUM_THREADS": val,
+    }
+
+
+def _run_batch_parallel(
+    work: list[tuple[str, str]],
+    profile: str | None,
+    overrides: list[str],
+    verbose: bool,
+    n_jobs: int,
+) -> int:
+    """Run `work` pipelines across `n_jobs` worker processes.
+
+    Returns 0 if all succeeded, 1 if any failed. Failures are logged as
+    they return; the batch continues on individual errors so a single
+    bad FITS doesn't abort a night's worth of processing.
+
+    BLAS thread count per worker is auto-throttled so N processes ×
+    all-cores-each doesn't oversubscribe. See `_blas_thread_env`.
+    """
+    import os as _os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    env_throttle = _blas_thread_env(n_jobs)
+    logger.info(
+        "batch: %d images across %d workers (BLAS threads/worker=%s)",
+        len(work),
+        n_jobs,
+        env_throttle["OMP_NUM_THREADS"],
+    )
+
+    # Apply the throttle to the parent so workers inherit. Restore on
+    # exit so a caller running parallel then sequential doesn't drag
+    # single-process BLAS threads down.
+    saved = {k: _os.environ.get(k) for k in env_throttle}
+    _os.environ.update(env_throttle)
+    try:
+        payloads = [(src, dst, profile, overrides, verbose) for src, dst in work]
+        failures = 0
+        with ProcessPoolExecutor(max_workers=n_jobs) as pool:
+            futures = {pool.submit(_batch_worker, p): p[0] for p in payloads}
+            for fut in as_completed(futures):
+                src, err = fut.result()
+                if err is None:
+                    logger.info("ok: %s", src)
+                else:
+                    logger.error("failed on %s: %s", src, err)
+                    failures += 1
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+    return 0 if failures == 0 else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.pipeline",
@@ -376,6 +481,20 @@ def main(argv: list[str] | None = None) -> int:
             "--override 'curves.channel_gains=1.4,1.1,0.6'"
         ),
     )
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "batch-mode parallelism: run N pipelines concurrently in "
+            "separate processes. Defaults to 1 (sequential). "
+            "`--jobs 0` picks one per CPU core. Each job costs ~300 MB "
+            "of RSS plus whatever BM3D allocates, so keep N*350 MB "
+            "under free memory. Ignored in single-file mode."
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -397,22 +516,32 @@ def main(argv: list[str] | None = None) -> int:
         inputs = list(args.input)
         if args.output is not None:
             inputs.append(args.output)
-        failures = 0
-        for in_path in inputs:
-            src = Path(in_path)
-            dst = (out_dir or src.parent) / f"{src.stem}.png"
-            try:
-                _run_one(
-                    str(src),
-                    str(dst),
-                    profile=selected,
-                    overrides=args.override,
-                    verbose=args.verbose,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.error("failed on %s: %s", src, exc)
-                failures += 1
-        return 0 if failures == 0 else 1
+        work = [
+            (str(Path(p)), str((out_dir or Path(p).parent) / f"{Path(p).stem}.png")) for p in inputs
+        ]
+        n_jobs = _resolve_batch_jobs(args.jobs, n_work=len(work))
+        if n_jobs == 1:
+            failures = 0
+            for src, dst in work:
+                try:
+                    _run_one(
+                        src,
+                        dst,
+                        profile=selected,
+                        overrides=args.override,
+                        verbose=args.verbose,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("failed on %s: %s", src, exc)
+                    failures += 1
+            return 0 if failures == 0 else 1
+        return _run_batch_parallel(
+            work,
+            selected,
+            args.override,
+            args.verbose,
+            n_jobs,
+        )
 
     # Single-file mode
     if args.output is None or len(args.input) != 1:

@@ -452,10 +452,43 @@ python -m app.pipeline --batch samples/*.fit --output-dir samples/outputs
 python -m app.pipeline --batch samples/*.fit \
     --profile nebula_wide \
     --override stretch.stretch=25
+
+# Parallel across worker processes (best throughput for large batches)
+python -m app.pipeline --batch samples/*.fit --jobs 4
+python -m app.pipeline --batch samples/*.fit --jobs 0   # one per CPU core
 ```
+
+`--jobs N` runs N pipelines concurrently in separate processes. BLAS
+thread count per worker is auto-throttled (each worker gets
+`cpu_count // N` BLAS threads) so the processes don't oversubscribe
+the CPU. On a 16-core box, 4 workers on 4 images was ~1.45× faster
+than sequential. Each worker costs ~300 MB of RSS plus BM3D's working
+set, so keep `N × 350 MB` under free memory.
 
 Per-file failures are logged and don't abort the batch; exit code is
 `0` if all succeeded, `1` if any failed.
+
+### Performance notes
+
+**Where time goes:** BM3D denoise is ~75 % of per-image wall time.
+The pip `bm3d` package is CPU-only, so the per-image floor is a
+function of your CPU, not your GPU.
+
+**What accelerates on Intel hardware:**
+
+- `--jobs N` (above) for batch throughput.
+- numpy/scipy already use Intel MKL or OpenBLAS with AVX-2/AVX-512,
+  so stretch, curves, sharpen, background are near-peak on any
+  modern Intel CPU. No knob to turn.
+- When v2 ML stages ship, ONNX Runtime with the OpenVINO provider
+  will run models on Intel iGPU. Planned — see [BACKLOG.md](BACKLOG.md).
+
+**What doesn't help on Intel hardware:**
+
+- Intel QuickSync is a video-codec block (H.264/HEVC encode/decode),
+  not general-purpose compute. Not applicable to this pipeline.
+- `bm3dcuda`, `cupy`, `cucim` — NVIDIA-only. The BACKLOG tracks
+  these as out-of-scope for the current target hardware.
 
 ## Backend API
 

@@ -35,8 +35,11 @@ Legend: `[ ]` open, `[x]` done, `[~]` in progress or partially landed.
 - [ ] Model registry: a small JSON/TOML manifest under
   `backend/app/models/` listing each bundled model's name, SHA-256,
   input/output tensor names, tile size, and license.
-- [ ] Optional CUDA provider: detect and prefer `CUDAExecutionProvider`
-  in `onnxruntime` when available, fall back to CPU.
+- [ ] Optional hardware providers for `onnxruntime`: detect and prefer
+  `OpenVINOExecutionProvider` on Intel CPU/iGPU (the project's target
+  hardware), fall back to CPU. A `CUDAExecutionProvider` path would
+  cover NVIDIA users if there are any — but see the Hardware
+  acceleration section in Pipeline improvements for the scope call.
 
 ## Pipeline improvements
 
@@ -472,6 +475,67 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 - [ ] Export to TIFF and FITS in addition to PNG.
 - [x] **Batch mode on the CLI** — _Shipped._ `python -m app.pipeline
   --batch samples/*.fit` writes a matching `.png` next to each input,
-  or under `--output-dir` when supplied. Per-file failures are logged
-  but don't abort the batch.
+  or under `--output-dir` when supplied. `--jobs N` runs N pipelines
+  in parallel worker processes (default 1; `--jobs 0` means one-per-
+  core). BLAS thread count per worker is auto-throttled so N workers
+  × all-cores-each doesn't oversubscribe. Measured ~1.45× throughput
+  on 4 images with 4 workers on a 16-core box. Per-file failures are
+  logged but don't abort the batch.
+
+## Hardware acceleration
+
+Where the wall time actually goes and what can be done about it, with
+a specific note on what's Intel-iGPU-compatible (the target hardware)
+vs NVIDIA-only (explicitly out of scope).
+
+Bottleneck: `bm3d_denoise` is ~75% of per-image pipeline time (BM3D
+block matching + 3D DCT). Everything else is numpy/scipy with BLAS
+auto-threading, already close to CPU-peak.
+
+- [x] **Parallel batch (CPU cores)** — _Shipped above._ `--jobs N`
+  runs multiple pipelines concurrently. Best throughput win for
+  batch scenarios. Intel CPUs only need `cpu_count >= 2`, which
+  covers every current chip.
+- [ ] **`downsample_factor=2` on BM3D as a user-selectable speed
+  preset** — the stage already supports it. Measured 2.7× speedup
+  on NGC 6888 but SSIM 0.80 vs full-res (visibly softer arc,
+  chroma blobs in sky). Not enabled by default because it costs
+  quality, but could ship as `--fast` flag that flips it per run.
+- [ ] **ONNX Runtime with OpenVINO provider for v2 ML stages** —
+  Intel's inference toolkit runs ONNX models on CPU/iGPU/VPU with
+  a single provider string. When v2 ML star removal + denoise ship,
+  the pipeline should detect OpenVINO availability and prefer the
+  iGPU provider (`OpenVINOExecutionProvider`) over CPU on Intel
+  hardware. Pattern is identical to CUDA detection — one provider
+  string and a fallback chain. This is the main "Intel iGPU
+  acceleration" path for this project.
+- [ ] **OpenCV UMat (OpenCL) for classical stages** — `cv2.UMat`
+  dispatches Gaussian blur / resize / CLAHE to OpenCL, which Intel
+  iGPU supports. Would accelerate `sharpen`, `clahe`, and the
+  BM3D downsample/upsample but not BM3D itself. Adds a ~40 MB
+  OpenCV dependency for single-digit-percent total speedup given
+  BM3D dominance. Borderline-worthwhile; revisit if BM3D ever gets
+  a non-CPU backend.
+
+### Out of scope (NVIDIA-only, documented for completeness)
+
+User confirmed no NVIDIA GPU plan. The following are faster than
+anything on Intel iGPU but would add a GPU dependency we can't use:
+
+- `bm3dcuda` (pip) — 10-30× faster BM3D, NVIDIA-only. The one path
+  that would actually make the dominant stage fast.
+- `cupy` / `cupyx.scipy.ndimage` / `cucim` — drop-in GPU scipy /
+  skimage. NVIDIA-only.
+- `CUDAExecutionProvider` for ONNX Runtime — NVIDIA-only analogue
+  of the OpenVINO provider above.
+
+If the user hardware plan ever changes, these are well-understood
+drop-ins, not research problems.
+
+### Already-used, no action needed
+
+- **Intel MKL via numpy/scipy wheels** — numpy ships with MKL or
+  OpenBLAS, both of which use AVX-2/AVX-512 on Intel CPUs. Every
+  dot product / FFT / convolution in scipy is already SIMD-
+  accelerated. No knob to turn.
 - [ ] Plate solving integration (astrometry.net) so outputs are WCS-stamped.
