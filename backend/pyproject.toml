@@ -1,3 +1,28 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# app/ is the main package; scripts/ are one-off fetch tools.
+src = ["app", "scripts", "tests"]
+
+[tool.ruff.lint]
+# Conservative starter set. `E` is pycodestyle, `F` is pyflakes, `I`
+# enforces import ordering, `B` catches likely-bug idioms, `UP` nudges
+# toward modern Python, `PLE` is the error subset of pylint. More rule
+# groups can land once the baseline is clean.
+select = ["E", "F", "I", "B", "UP", "PLE"]
+ignore = [
+    "E501",  # line-length handled by the formatter
+    "B008",  # FastAPI depends on default-arg Depends() / Query()
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests regularly shadow builtins and redefine fixtures by name.
+"tests/**" = ["F811", "F841"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

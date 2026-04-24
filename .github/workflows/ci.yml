@@ -1,0 +1,56 @@
+name: CI
+
+# Runs on every push to any branch and on every pull request. Keeps the
+# main branch green and catches regressions before they merge.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # All pytest / ruff invocations assume the backend/ directory as
+        # cwd (that's where pyproject.toml + requirements.txt live).
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff
+
+      # `ruff check` is advisory while the codebase hasn't been
+      # linted through yet — failures surface as an annotation but
+      # don't block the job. Flip to hard-fail once the initial
+      # cleanup pass lands.
+      - name: Ruff lint
+        continue-on-error: true
+        run: ruff check .
+
+      - name: Ruff format check
+        continue-on-error: true
+        run: ruff format --check .
+
+      # Pytest runs from backend/ per the pyproject.toml testpaths.
+      # Golden-image tests auto-skip if the samples / catalog bundle
+      # aren't present, so a clean checkout without LFS still runs
+      # the 87 non-golden tests.
+      - name: Pytest
+        run: pytest -q --durations=10
