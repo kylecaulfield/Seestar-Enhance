@@ -79,6 +79,13 @@ Legend: `[ ]` open, `[x]` done, `[~]` in progress or partially landed.
   luma so dark pixels (sky) get near-identity but bright pixels
   (nebula) get the full colour shift. Used by nebula profile to
   restore the Ha-dominant R:G:B ratio.
+- [x] **Star-taper on channel_gains in curves** — _Shipped in `502d705`._
+  Aggressive warm gains were tinting stars yellow-green because stars
+  sit at luma≈1.0 and got the full gain applied. The curves stage
+  now tapers `channel_gains` back toward identity at the top
+  `star_preserve_percentile` (default 99.0), mirroring the existing
+  saturation taper. Lets nebula profiles use strong Ha-red gains
+  without fouling star colours.
 
 ## Reference-match improvements
 
@@ -177,7 +184,7 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 
   **Phased plan — five phases at ≤ 6 hours of focused work each:**
 
-  - [~] **Phase 1 — Gaia DR3 catalog bundle (~3-4 h)**
+  - [x] **Phase 1 — Gaia DR3 catalog bundle (~3-4 h)**
     - Add `astroquery` + `pyarrow` to `backend/requirements.txt`.
     - Write `backend/scripts/fetch_gaia.py`: ADQL query against
       `https://gea.esac.esa.int/tap-server/tap`, filters to
@@ -195,13 +202,19 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
     - Commit message: "Phase 1: bundle Gaia DR3 bright-star catalog"
     - Exit criteria: one new file, one test passing, `pip install -r
       requirements.txt` still works on a fresh container.
-    - **Status (`0ad96dc`):** infrastructure landed (script, deps,
-      tests, data/ package + README). **Data file deferred** — see
-      the follow-up item below.
+    - **Status:** infrastructure landed in `0ad96dc`; data file
+      landed in `9888e63` after ESA recovered — see the follow-up
+      item below for how the 3M-row cap got worked around.
 
   - [x] **Phase 1 follow-up — actually run `fetch_gaia.py` and commit
-    the Parquet**. Not a full phase, ~30 min of work once the archive
-    is cooperative:
+    the Parquet**. _Shipped in `9888e63`._ The ESA archive recovered
+    (small probes return in ~1 s with an "archive unstable" banner
+    but functional responses). Gotcha discovered: ESA async TAP caps
+    results at 3,000,000 rows server-side — a single G<12 full-sky
+    query silently truncates. Fix was to split the ADQL into four
+    90° RA bands and vstack to 3.08M rows. Catalog is 84 MB
+    (brotli + float32 ra/dec). All 288 sky tiles populated, up from
+    ~50 in the regional workaround. Historic context below:
     - Try `python backend/scripts/fetch_gaia.py` (defaults to G < 12,
       auto-fallback ESA → Vizier). Expect ~30 MB output.
     - If ESA is still 500-ing, set `GAIA_SOURCE=vizier` and wait
@@ -386,9 +399,14 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 - [ ] Property-based tests with `hypothesis`: generate random float32
   RGB images and assert the `[0, 1]` invariant is preserved by every
   stage.
-- [ ] Golden-image tests: store one reference PNG per profile per sample
-  and diff with a perceptual metric (e.g., SSIM ≥ 0.95). Guards against
-  silent regressions in numeric behavior.
+- [x] **Golden-image tests** — _Shipped in `e54ac8c`._
+  `backend/tests/test_golden.py` runs the full pipeline on each of the
+  six sample FITS and compares the 400×400 downscaled output to a
+  committed golden PNG via SSIM ≥ 0.95. Six goldens total, ~1.1 MB
+  bundle under `backend/tests/golden/`. `REGEN_GOLDEN=1 pytest -k
+  test_golden` refreshes them when a profile tune is intentional.
+  Auto-skips when `samples/` is absent so contributors without the
+  raw data still run the other 110 tests.
 - [ ] Benchmark suite: `pytest-benchmark` timings per stage at a few
   resolutions, so we can see regressions over time.
 - [ ] Frontend: basic Playwright smoke test that loads the SPA and
@@ -396,8 +414,22 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 
 ## DevOps / CI
 
-- [ ] GitHub Actions workflow: `pytest` + `ruff` + `mypy` on every PR.
+- [~] **GitHub Actions workflow: `pytest` + `ruff` + `mypy` on every
+  PR.** — _Partially shipped in `e54ac8c`._ `pytest` and `ruff`
+  (lint + format check) run on every push and pull request via
+  `.github/workflows/ci.yml`. Ruff findings are `continue-on-error`
+  until the 74-finding baseline is cleaned up. `mypy` still open.
+- [ ] **Ruff baseline cleanup** — 74 findings flagged on the initial
+  `ruff check`. Mostly `UP` (modernize annotations / imports) and
+  `I` (import ordering), with a few `B` and one `E741`. Clearing
+  the baseline lets CI flip `continue-on-error: false` so new
+  lint debt can't land.
 - [ ] Pre-commit hooks: `ruff format`, `ruff check`, trailing whitespace.
+- [ ] **Git LFS for `gaia_bright.parquet`** — the full-sky catalog
+  is 80 MB, above GitHub's 50 MB soft limit. The file pushes fine
+  today but GitHub warns on every push. Migrating the single file
+  to LFS removes the warning and keeps clone size sane if the
+  catalog grows (e.g. deeper magnitude limit, multi-band extensions).
 - [ ] Publish a multi-arch backend Docker image (amd64 + arm64) to
   GHCR on tagged releases.
 - [ ] Dependabot for `pip` and `npm`.
