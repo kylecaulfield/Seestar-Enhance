@@ -132,11 +132,28 @@ def process(
         raise ValueError(f"expected (H, W, 3), got {image.shape}")
 
     img = image.astype(np.float32, copy=False)
+
+    # Guard: the upstream `bm3d` package divides by (block_max -
+    # block_min) per 8x8 block and returns NaN whenever it hits a
+    # constant block — full-frame constant input, gradients along
+    # one axis, blank corrupt FITS, etc. Skip BM3D entirely on
+    # zero-variance frames (no noise to denoise anyway) and apply
+    # only the chroma blur, which handles constants fine.
+    if float(img.max() - img.min()) < 1e-7:
+        if chroma_edge_aware and chroma_blur > 0:
+            return _chroma_bilateral(img, chroma_blur, chroma_edge_luma_sigma)
+        return _chroma_smooth(img, chroma_blur)
+
     s = _estimate_sigma(img) if sigma is None else float(sigma)
     s = max(1e-4, s * float(strength))
 
     if downsample_factor <= 1:
         denoised = bm3d.bm3d_rgb(img, sigma_psd=s).astype(np.float32, copy=False)
+        # Block-level NaN escape hatch: if BM3D hit a degenerate block
+        # (gradient along one axis is the typical case in tests), fall
+        # back to the original pixel rather than poisoning the output.
+        if not np.all(np.isfinite(denoised)):
+            denoised = np.where(np.isfinite(denoised), denoised, img)
         denoised = np.clip(denoised, 0.0, 1.0)
     else:
         # Denoise a downscaled copy; recover high-frequency detail from

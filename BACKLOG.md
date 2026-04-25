@@ -344,9 +344,15 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
   (M81 nucleus, M92 dense center, bright Veil stars) keep gradient
   instead of clipping to pure white.
 - [ ] Profile for wide-field Milky Way shots (Seestar mosaic mode).
-- [ ] Let profiles override only a subset of a parent profile (current
-  implementation uses `{**DEFAULT, "stretch": {...}}` which replaces
-  the whole sub-dict — fine for now, awkward as profiles grow).
+- [x] **Nested profile merging** — _Shipped._ `profiles.merge(parent,
+  **overrides)` recursively merges override dicts onto a deep copy of
+  the parent. Sub-profiles only specify keys they're actually changing;
+  sibling keys at every nesting level are inherited automatically.
+  Replaces the `{**PARENT, "color": {**PARENT["color"], "ccm": None}}`
+  pattern that silently wiped sibling sub-keys when the spread was
+  forgotten. NEBULA / NEBULA_WIDE / NEBULA_FILAMENT / NEBULA_DOMINANT
+  / GALAXY / CLUSTER all ported to the new shape; output unchanged
+  (golden tests pass). 11 new tests in `test_profiles.py`.
 - [x] **`--override stage.param=value` flag on the CLI** — _Shipped._
   `python -m app.pipeline ... --override stretch.stretch=22 --override
   'curves.channel_gains=1.4,1.1,0.6'` patches the resolved profile
@@ -402,9 +408,16 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
   TestClient.
 - [x] **Pipeline progress-callback test** — _shipped._ Verifies every
   declared stage emits a progress event.
-- [ ] Property-based tests with `hypothesis`: generate random float32
-  RGB images and assert the `[0, 1]` invariant is preserved by every
-  stage.
+- [x] **Property-based tests with `hypothesis`** — _Shipped._
+  `tests/test_stage_invariants.py` runs 25 hypothesis-driven examples
+  against each stage (background / color / stretch / bm3d_denoise /
+  sharpen / curves / cosmetic / dark_subtract / crop / classify) plus
+  15 explicit constant-frame edge cases. Verifies the `(H, W, 3)
+  float32 in [0, 1]` contract end-to-end. The first run found a real
+  bug: BM3D's upstream library divides by zero on constant or
+  axis-constant inputs and returns NaN, which would NaN the entire
+  pipeline on a corrupt FITS. Fixed in `bm3d_denoise.process()` with
+  a zero-variance early-out and a NaN-pixel fallback to original.
 - [x] **Golden-image tests** — _Shipped in `e54ac8c`._
   `backend/tests/test_golden.py` runs the full pipeline on each of the
   six sample FITS and compares the 400×400 downscaled output to a

@@ -10,6 +10,7 @@ pypng==0.20220715.0
 colour-demosaicing==0.2.5
 bm3d==4.0.3
 pytest==8.3.3
+hypothesis==6.115.5
 # v2 — SPCC (Phase 1). astroquery fetches the Gaia DR3 subset via
 # the ESA TAP service; pyarrow reads/writes the Parquet bundle that
 # ships in backend/app/data/.
