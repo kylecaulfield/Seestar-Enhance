@@ -53,5 +53,21 @@ jobs:
       # Golden-image tests auto-skip if the samples / catalog bundle
       # aren't present, so a clean checkout without LFS still runs
       # the 110 non-golden tests.
+      #
+      # The env vars throttle BLAS / OpenMP to one thread per process.
+      # Without this, GH Actions runners exhibit a SIGABRT (pytest
+      # exit code 2) when test_api runs a pipeline via the API thread
+      # pool and then test_pipeline runs another pipeline in the
+      # main thread — bm3d / OMP / MKL state gets corrupted across
+      # the worker-thread → main-thread transition. Locally the
+      # crash is masked by larger RAM and a different MKL build,
+      # but on the 4-core / 7 GB runner the race triggers reliably.
+      # Same approach our CLI uses in `_run_batch_parallel`.
       - name: Pytest
+        env:
+          OMP_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
         run: pytest -q --durations=10
