@@ -1,4 +1,10 @@
 fastapi==0.115.0
+# httpx is the transport `fastapi.testclient.TestClient` runs on top of.
+# FastAPI lists it as an *optional* dep (in its `all` extra, not the
+# base install), so a fresh pip install with the line above alone
+# leaves test_api.py uncollectable: `from fastapi.testclient import
+# TestClient` raises ImportError, pytest exits 2, and CI fails.
+httpx==0.28.1
 python-multipart==0.0.12
 uvicorn[standard]==0.30.6
 astropy==6.1.4
