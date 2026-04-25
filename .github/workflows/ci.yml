@@ -49,25 +49,33 @@ jobs:
         continue-on-error: true
         run: mypy app
 
-      # Pytest runs from backend/ per the pyproject.toml testpaths.
-      # Golden-image tests auto-skip if the samples / catalog bundle
-      # aren't present, so a clean checkout without LFS still runs
-      # the 110 non-golden tests.
+      # Pytest is split into two invocations so test_api (which runs
+      # pipelines via the FastAPI ThreadPoolExecutor) gets its own
+      # subprocess. In a single combined run, OMP / MKL helper
+      # threads spawned by bm3d in the API worker pool corrupt state
+      # for the subsequent direct-pipeline tests (test_pipeline,
+      # test_golden), and pytest aborts with exit code 2 — see
+      # https://github.com/kylecaulfield/Seestar-Enhance/actions/runs/24933312444
+      # for the original failure. Locally the crash is masked by
+      # larger RAM and a different MKL build; on the 4-core / 7 GB
+      # GH runner the race triggers reliably.
       #
-      # The env vars throttle BLAS / OpenMP to one thread per process.
-      # Without this, GH Actions runners exhibit a SIGABRT (pytest
-      # exit code 2) when test_api runs a pipeline via the API thread
-      # pool and then test_pipeline runs another pipeline in the
-      # main thread — bm3d / OMP / MKL state gets corrupted across
-      # the worker-thread → main-thread transition. Locally the
-      # crash is masked by larger RAM and a different MKL build,
-      # but on the 4-core / 7 GB runner the race triggers reliably.
-      # Same approach our CLI uses in `_run_batch_parallel`.
-      - name: Pytest
+      # The thread-throttle env vars are belt-and-suspenders; the
+      # process split is the real fix.
+      - name: Pytest — API tests (TestClient-based, isolated process)
         env:
           OMP_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           NUMEXPR_NUM_THREADS: "1"
           VECLIB_MAXIMUM_THREADS: "1"
-        run: pytest -q --durations=10
+        run: pytest tests/test_api.py -q --durations=5
+
+      - name: Pytest — everything else (incl. goldens)
+        env:
+          OMP_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+        run: pytest tests/ --ignore=tests/test_api.py -q --durations=10
