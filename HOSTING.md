@@ -394,6 +394,25 @@ off-box for the real backup.
 
 ---
 
+## Security knobs
+
+Set these on the backend container if you expose the API beyond
+localhost:
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `ALLOWED_ORIGINS` | `http://localhost:8000,http://localhost:5173,http://127.0.0.1:*` | Comma-separated CORS allowlist. Set to the full origin (`https://astro.example.com`) of any SPA you front the API with. The literal `*` is supported but only sane behind a reverse proxy that does its own auth. |
+
+Every response also carries a tight `Content-Security-Policy`, plus
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and
+`Referrer-Policy: no-referrer`. These are added by middleware in
+`backend/app/main.py`; you can override with your own headers at the
+reverse-proxy layer if needed.
+
+The backend has **no built-in authentication**. If you expose it on a
+public port, put a reverse proxy (Caddy, NGINX Proxy Manager, etc.) in
+front and require basic-auth or OIDC at that layer.
+
 ## Resource sizing
 
 Quick guidance for picking a host:

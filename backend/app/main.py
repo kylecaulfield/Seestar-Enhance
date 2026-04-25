@@ -20,6 +20,7 @@ upgrade path.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import tempfile
 import threading
@@ -31,11 +32,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.pipeline import run
 from app.stages.io_fits import load_fits
@@ -238,7 +240,13 @@ def _friendly_error(exc: BaseException) -> str:
     name = type(exc).__name__
     if name == "OSError" or name.endswith("VerifyError") or name.endswith("HeaderParsingError"):
         return "Could not parse the uploaded file as a Seestar FITS image."
-    return f"{name}: {str(exc)[:200]}"
+    # Strip the per-job temp directory from any exception message —
+    # otherwise astropy's "Could not parse FITS at /tmp/seestar-
+    # enhance-jobs/<uuid>/input.fits" leaks our internal layout to
+    # users. Pattern is fixed so a simple replace suffices.
+    msg = str(exc)[:400]
+    msg = msg.replace(str(_WORK_ROOT), "[job]")
+    return f"{name}: {msg[:200]}"
 
 
 def _sweep_orphan_dirs() -> None:
@@ -312,12 +320,61 @@ async def _lifespan(app: FastAPI):  # noqa: ANN001 — FastAPI lifespan signatur
 
 app = FastAPI(title="Seestar Enhance API", version="0.1.0", lifespan=_lifespan)
 
+
+# CORS allowlist. v1 has no auth, so the default is restrictive: only
+# same-origin (FastAPI serves the SPA) plus the local Vite dev port.
+# Operators that front the API with a known SPA host set the env var
+# (comma-separated). The literal "*" remains supported for users who
+# really want the old open behaviour, with a warning in HOSTING.md.
+_DEFAULT_ALLOWED_ORIGINS = (
+    "http://localhost:8000,http://localhost:5173,http://127.0.0.1:8000,http://127.0.0.1:5173"
+)
+_allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", _DEFAULT_ALLOWED_ORIGINS).strip()
+if _allowed_origins_raw == "*":
+    _allowed_origins: list[str] = ["*"]
+else:
+    _allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=_allowed_origins,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+# Content-Security-Policy + a small set of standard hardening headers.
+# v1 is fully self-hosted (no third-party JS, no inline scripts beyond
+# what Vite emits in the bundle, no external images) so the policy can
+# be tight. Defence-in-depth — we don't have any XSS today (React auto-
+# escapes everything we render) but a future contributor adding
+# dangerouslySetInnerHTML would inherit a CSP-protected baseline.
+class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            # `unsafe-inline` is unavoidable because Vite's preload-
+            # link injection emits a tiny inline script. If Vite ever
+            # ships a strict-CSP-compatible build mode, drop it.
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        # X-Frame-Options is a legacy duplicate of frame-ancestors but
+        # some hosts/CDNs still strip CSP; keep both.
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        return response
+
+
+app.add_middleware(_SecurityHeadersMiddleware)
 
 
 @app.get("/health")

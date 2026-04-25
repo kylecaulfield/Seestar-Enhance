@@ -114,3 +114,32 @@ def test_stage_preview_unknown_job() -> None:
     with TestClient(app) as client:
         r = client.get("/preview/nosuch/stage/load")
     assert r.status_code == 404
+
+
+# ---------- security headers ----------
+
+
+def test_response_carries_csp_and_hardening_headers() -> None:
+    """Every response carries the CSP + standard hardening headers."""
+    with TestClient(app) as client:
+        r = client.get("/health")
+    assert r.status_code == 200
+    csp = r.headers.get("content-security-policy", "")
+    assert "default-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert r.headers.get("x-content-type-options") == "nosniff"
+    assert r.headers.get("x-frame-options") == "DENY"
+    assert r.headers.get("referrer-policy") == "no-referrer"
+
+
+def test_error_message_strips_internal_temp_path() -> None:
+    """`_friendly_error` should not leak the per-job temp path in
+    user-visible error messages.
+    """
+    from app.main import _WORK_ROOT, _friendly_error
+
+    leak = OSError(f"failed to read {_WORK_ROOT / 'abc123' / 'input.fits'}")
+    msg = _friendly_error(leak)
+    assert str(_WORK_ROOT) not in msg
+    assert "[job]" in msg or "Could not parse" in msg

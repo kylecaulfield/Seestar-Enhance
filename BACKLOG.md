@@ -377,9 +377,20 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
   upload validation rejects non-FITS early.
 - [x] **Non-root container** — _shipped in `4948a9a`._ `USER appuser`
   (UID 10001) in the Dockerfile.
-- [x] **FITS-bomb defence** — _shipped in `4948a9a`._ Manual header
-  pre-parse rejects anything declaring >2 GiB of image data before
-  astropy gets a chance to allocate.
+- [x] **FITS-bomb defence** — _shipped in `4948a9a`, hardened later._
+  Manual header pre-parse rejects anything declaring >2 GiB of image
+  data before astropy gets a chance to allocate. Hardening pass
+  extended the validator to walk extension HDUs and inspect
+  `ZIMAGE`/`ZNAXIS*` keywords so a tile-compressed BINTABLE that
+  declares a multi-GB decompressed array is rejected at the gate.
+- [x] **CORS allowlist + security headers** — _shipped._ Default
+  `allow_origins` restricted to localhost (`8000` + `5173`); operators
+  fronting the API with a known SPA host set the `ALLOWED_ORIGINS`
+  comma-separated env var. New `_SecurityHeadersMiddleware` adds
+  `Content-Security-Policy`, `X-Content-Type-Options`,
+  `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer` to
+  every response. `_friendly_error` strips the per-job temp path
+  out of exception messages so internal layout doesn't leak.
 - [ ] Persistent job store (SQLite) so the server can survive restarts.
 
 ## Frontend

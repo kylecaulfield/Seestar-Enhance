@@ -42,38 +42,53 @@ _VALID_BAYER_PATTERNS = {"RGGB", "BGGR", "GRBG", "GBRG"}
 _MAX_DECLARED_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
 
 
-def _validate_fits_header(path: PathLike) -> None:
-    """Pre-parse the FITS primary header and reject obviously hostile files.
+def _read_fits_header_blocks(f, max_blocks: int = 5) -> dict[str, str]:
+    """Walk one FITS header (2880-byte blocks) and return its KEYWORD=VALUE
+    cards as a string dict. Stops at the END card. Caller positions ``f``
+    at the start of the header before calling.
 
-    Reads only the first header block(s) — never the data region — and
-    walks the 80-char cards manually so we never hand a bomb to astropy.
-    Raises ValueError on anything suspicious.
+    Reads at most ``max_blocks`` blocks (default 14400 bytes / ~180 cards)
+    before giving up — long enough for any plausible Seestar header but
+    short enough to bound work on a hostile input.
     """
     block_size = 2880
     card_size = 80
     values: dict[str, str] = {}
 
-    with open(path, "rb") as f:
-        # A FITS header can span multiple 2880-byte blocks; read up to 5
-        # blocks (14400 bytes, room for ~180 cards) before giving up.
-        for _ in range(5):
-            block = f.read(block_size)
-            if len(block) < block_size:
-                raise ValueError("FITS header truncated")
-            end_marker_found = False
-            for i in range(0, block_size, card_size):
-                card = block[i : i + card_size].decode("ascii", errors="replace")
-                key = card[:8].strip()
-                if key == "END":
-                    end_marker_found = True
-                    break
-                if "=" in card[:10]:
-                    value_part = card[10:].split("/", 1)[0].strip()
-                    values[key] = value_part.strip("' ")
-            if end_marker_found:
+    for _ in range(max_blocks):
+        block = f.read(block_size)
+        if len(block) < block_size:
+            raise ValueError("FITS header truncated")
+        end_marker_found = False
+        for i in range(0, block_size, card_size):
+            card = block[i : i + card_size].decode("ascii", errors="replace")
+            key = card[:8].strip()
+            if key == "END":
+                end_marker_found = True
                 break
-        else:
-            raise ValueError("FITS header did not terminate within 5 blocks")
+            if "=" in card[:10]:
+                value_part = card[10:].split("/", 1)[0].strip()
+                values[key] = value_part.strip("' ")
+        if end_marker_found:
+            return values
+    raise ValueError("FITS header did not terminate within block limit")
+
+
+def _check_declared_image_bytes(values: dict[str, str], hdu_label: str) -> None:
+    """Inspect a parsed header dict and raise if the declared image data
+    (or compressed-image decompressed size) exceeds the cap.
+
+    Handles two patterns:
+
+    * Plain image HDU: ``NAXIS`` + ``NAXISn`` + ``BITPIX`` describe raw
+      pixel storage. Product is the on-disk size.
+    * Tile-compressed image extension (``ZIMAGE = T``): the on-disk
+      ``BINTABLE`` is small, but ``ZNAXISn`` + ``ZBITPIX`` describe the
+      decompressed array. A "fits-bomb" frame can declare a 100 kB
+      BINTABLE that decompresses to gigabytes; astropy will happily
+      allocate the full array on ``.data`` access. The cap is the same
+      for both forms.
+    """
 
     def _as_int(name: str, default: int = 0) -> int:
         try:
@@ -81,27 +96,139 @@ def _validate_fits_header(path: PathLike) -> None:
         except (TypeError, ValueError):
             raise ValueError(f"FITS header {name} is not an integer") from None
 
-    bitpix = _as_int("BITPIX")
-    naxis = _as_int("NAXIS")
+    # Compressed image takes precedence — if the HDU is a tile-compressed
+    # image, the ZNAXIS*/ZBITPIX keywords describe the real allocation
+    # size, not NAXIS/BITPIX (which describe the BINTABLE wrapper).
+    is_compressed = values.get("ZIMAGE", "").upper().startswith("T") or (
+        values.get("XTENSION", "").upper() == "BINTABLE" and "ZNAXIS" in values
+    )
+
+    if is_compressed:
+        bitpix_key, naxis_key, axis_key_fmt = "ZBITPIX", "ZNAXIS", "ZNAXIS{}"
+    else:
+        bitpix_key, naxis_key, axis_key_fmt = "BITPIX", "NAXIS", "NAXIS{}"
+
+    bitpix = _as_int(bitpix_key)
+    naxis = _as_int(naxis_key)
     if naxis < 0 or naxis > 4:
-        raise ValueError(f"FITS NAXIS={naxis} outside supported range")
+        raise ValueError(f"FITS {hdu_label} {naxis_key}={naxis} outside supported range")
     if bitpix not in (8, 16, 32, 64, -32, -64):
-        raise ValueError(f"FITS BITPIX={bitpix} not recognised")
+        raise ValueError(f"FITS {hdu_label} {bitpix_key}={bitpix} not recognised")
 
     total = 1
     for axis in range(1, naxis + 1):
-        dim = _as_int(f"NAXIS{axis}")
+        dim = _as_int(axis_key_fmt.format(axis))
         if dim <= 0:
-            return  # NAXIS=0 or missing size ⇒ no image data, safe.
+            return  # naxis=0 or missing size ⇒ no image data, safe.
         if dim > 100_000:
-            raise ValueError(f"FITS NAXIS{axis}={dim} exceeds plausible image size")
+            raise ValueError(
+                f"FITS {hdu_label} {axis_key_fmt.format(axis)}={dim} exceeds plausible image size"
+            )
         total *= dim
     declared_bytes = total * (abs(bitpix) // 8)
     if declared_bytes > _MAX_DECLARED_IMAGE_BYTES:
         raise ValueError(
-            f"FITS declares {declared_bytes} bytes of image data; "
-            f"max allowed is {_MAX_DECLARED_IMAGE_BYTES}"
+            f"FITS {hdu_label} declares {declared_bytes} bytes of "
+            f"image data; max allowed is {_MAX_DECLARED_IMAGE_BYTES}"
         )
+
+
+def _validate_fits_header(path: PathLike) -> None:
+    """Pre-parse FITS headers and reject obviously hostile files.
+
+    Walks both the primary HDU and any extension HDUs (up to a fixed
+    cap) checking each for plausible image-data sizes. The compressed-
+    image case (``ZIMAGE``) is the security-critical one: a small
+    BINTABLE can declare a multi-GB decompressed array, and astropy
+    allocates that array on ``.data`` access in `_read_fits_hdu`.
+
+    Raises ``ValueError`` on anything suspicious; never reads the data
+    region of any HDU. Does not call into astropy.
+    """
+    block_size = 2880
+    max_extensions = 16  # plenty for any real Seestar/stacked frame.
+
+    with open(path, "rb") as f:
+        # Primary HDU
+        primary = _read_fits_header_blocks(f)
+        _check_declared_image_bytes(primary, hdu_label="primary HDU")
+        primary_bitpix = abs(int(primary.get("BITPIX", 0) or 0))
+        primary_data_bytes = 0
+        primary_naxis = int(primary.get("NAXIS", 0) or 0)
+        if primary_naxis > 0:
+            n = 1
+            for axis in range(1, primary_naxis + 1):
+                dim = int(primary.get(f"NAXIS{axis}", 0) or 0)
+                if dim <= 0:
+                    n = 0
+                    break
+                n *= dim
+            primary_data_bytes = n * (primary_bitpix // 8)
+
+        # Skip past primary data region (zero-padded to 2880-byte blocks)
+        # so the next header read picks up the first extension's header.
+        if primary_data_bytes > 0:
+            padded = ((primary_data_bytes + block_size - 1) // block_size) * block_size
+            try:
+                f.seek(padded, 1)
+            except OSError as e:
+                raise ValueError(f"FITS file truncated at primary data: {e}") from None
+
+        for ext_idx in range(max_extensions):
+            # Peek at the first 80 bytes; if we can't read a full card,
+            # we're at EOF (no more extensions).
+            head = f.read(80)
+            if len(head) < 80:
+                return
+            f.seek(-80, 1)
+            xtension = head[:8].decode("ascii", errors="replace").strip()
+            if xtension not in ("XTENSION", ""):
+                # Not a recognised extension start; bail rather than
+                # try to interpret arbitrary bytes.
+                return
+            try:
+                ext_values = _read_fits_header_blocks(f)
+            except ValueError:
+                # Truncated extension header — let astropy report it
+                # instead of pre-rejecting on partial input.
+                return
+            _check_declared_image_bytes(ext_values, hdu_label=f"extension HDU {ext_idx}")
+
+            # Skip the extension's data region too. For BINTABLEs this
+            # is NAXIS1*NAXIS2 bytes (NAXIS1 already includes the row
+            # width incl. compressed payload), plus PCOUNT for the
+            # heap. We bound by the size cap and bail on overflow.
+            try:
+                ext_bitpix = abs(int(ext_values.get("BITPIX", 0) or 0))
+                ext_naxis = int(ext_values.get("NAXIS", 0) or 0)
+                ext_pcount = int(ext_values.get("PCOUNT", 0) or 0)
+                ext_gcount = int(ext_values.get("GCOUNT", 1) or 1)
+            except (TypeError, ValueError):
+                return
+            if ext_naxis <= 0:
+                continue
+            n = 1
+            for axis in range(1, ext_naxis + 1):
+                dim = int(ext_values.get(f"NAXIS{axis}", 0) or 0)
+                if dim <= 0:
+                    n = 0
+                    break
+                n *= dim
+            ext_data_bytes = (n * (ext_bitpix // 8) + ext_pcount) * ext_gcount
+            if ext_data_bytes < 0 or ext_data_bytes > _MAX_DECLARED_IMAGE_BYTES:
+                raise ValueError(
+                    f"FITS extension HDU {ext_idx} declares "
+                    f"{ext_data_bytes} bytes; max allowed is "
+                    f"{_MAX_DECLARED_IMAGE_BYTES}"
+                )
+            if ext_data_bytes > 0:
+                padded = ((ext_data_bytes + block_size - 1) // block_size) * block_size
+                try:
+                    f.seek(padded, 1)
+                except OSError as e:
+                    raise ValueError(
+                        f"FITS file truncated at extension {ext_idx} data: {e}"
+                    ) from None
 
 
 def _detect_bayer_pattern(header: fits.Header) -> str:
