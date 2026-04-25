@@ -1,11 +1,25 @@
 name: Build and publish container image
 
-# Push protection: every commit to main rebuilds, and semver tags land
-# as a matching `v1.2.3` image tag. `workflow_dispatch` lets us rebuild
-# on demand without pushing (useful after base-image security updates).
+# Push protection: rebuild on commits to main that actually change the
+# image (Dockerfile, runtime code, deps), on every `v*.*.*` semver tag,
+# and on demand via `workflow_dispatch` (e.g. after a base-image security
+# update with no source change).
+#
+# Documentation-only commits (README, BACKLOG, HOSTING, CI workflow
+# itself) shouldn't trigger a multi-arch rebuild — the image is identical
+# and ghcr's storage isn't free. The `paths` filter below excludes
+# samples/, docs/, run_*.py, *.md, and .github/** for that reason.
 on:
   push:
     branches: [main]
+    paths:
+      - "Dockerfile"
+      - "backend/app/**"
+      - "backend/requirements.txt"
+      - "backend/pyproject.toml"
+      - "frontend/**"
+      - "!frontend/**/*.md"
+      - ".dockerignore"
     tags: ["v*.*.*"]
   workflow_dispatch:
 
