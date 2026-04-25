@@ -164,6 +164,13 @@ def process(
         dw = max(64, w // downsample_factor)
         small = _resize(img, (dh, dw))
         small_denoised = bm3d.bm3d_rgb(small, sigma_psd=s).astype(np.float32, copy=False)
+        # Same NaN guard as the full-res branch — degenerate blocks
+        # in the downsampled image NaN-out small_denoised, and the
+        # downstream low_freq + high_freq math then poisons every
+        # pixel. Fall back to the un-denoised downsampled input
+        # before the upsample so the recovery is symmetric.
+        if not np.all(np.isfinite(small_denoised)):
+            small_denoised = np.where(np.isfinite(small_denoised), small_denoised, small)
         low_freq = _resize(np.clip(small_denoised, 0.0, 1.0), (h, w))
         # Original - upsampled-denoised-low-freq = high-frequency detail
         # that survived the noise floor. Add it back to the smoothed base.

@@ -561,3 +561,23 @@ drop-ins, not research problems.
   dot product / FFT / convolution in scipy is already SIMD-
   accelerated. No knob to turn.
 - [ ] Plate solving integration (astrometry.net) so outputs are WCS-stamped.
+
+## Latent landmines
+
+Code paths that work today but would race or corrupt under a future
+change. Documented so the trap is visible when the trigger lands.
+
+- [ ] **`pipeline._run_one` mutates the global profile registry**
+  (`profiles.PROFILES[profile] = patched`) inside a try/finally. Safe
+  in single-process CLI today. If `_run_one` ever gets called from a
+  thread (e.g. the FastAPI worker pool), two concurrent overrides
+  would clobber each other. Fix when triggered: thread the patched
+  profile through `pipeline.run()` directly instead of monkey-
+  patching the registry.
+- [ ] **`pipeline._run_batch_parallel` mutates `os.environ`** to
+  throttle BLAS threads, then restores in a finally. Other threads
+  in the same process see the throttled values during the batch.
+  Currently CLI-only so no trigger. Fix when triggered: use
+  `subprocess.Popen` with the throttle in `env=` rather than
+  mutating the parent process env, OR serialise concurrent batch
+  invocations with a module-level lock.

@@ -48,6 +48,17 @@ type StageStripProps = {
 };
 
 function StageStrip({ jobId, stages }: StageStripProps) {
+  // Hide thumbs that fail to load — happens transiently while the worker
+  // is still writing the file (server returns 409 if the worker hasn't
+  // produced the thumb yet, or the atomic rename hasn't happened). The
+  // next /status poll re-includes the stage and the <img> retries.
+  const onImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    e.currentTarget.style.visibility = "hidden";
+  };
+  const onImgLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    e.currentTarget.style.visibility = "visible";
+  };
+
   if (stages.length === 0) return null;
   return (
     <div className="stage-strip" aria-label="Pipeline stages">
@@ -57,6 +68,8 @@ function StageStrip({ jobId, stages }: StageStripProps) {
             src={`${API_BASE}/preview/${jobId}/stage/${stage}`}
             alt={stageLabel(stage)}
             loading="lazy"
+            onError={onImgError}
+            onLoad={onImgLoad}
           />
           <figcaption>{stageLabel(stage)}</figcaption>
         </figure>

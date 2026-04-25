@@ -119,7 +119,16 @@ def _save_stage_preview(
     as_u8 = np.ascontiguousarray(np.clip(arr * 255.0, 0, 255).astype(np.uint8))
     pil = _PILImage.fromarray(as_u8, mode="RGB")
     path.parent.mkdir(parents=True, exist_ok=True)
-    pil.save(str(path), format="PNG", optimize=True)
+    # Atomic write: PIL writes incrementally to `path` if we save directly,
+    # so a /preview/{id}/stage/{name} request that races the worker thread
+    # can hit a partial PNG and 500. Save to a `.tmp` sibling and rename
+    # onto the final name — POSIX rename swaps the inode atomically so
+    # readers always see either the previous PNG or the new one. The
+    # `_refresh_stages_done` glob is `*.png` so the `.png.tmp` siblings
+    # are invisible to the API.
+    tmp_path = path.with_name(path.name + ".tmp")
+    pil.save(str(tmp_path), format="PNG", optimize=True)
+    tmp_path.replace(path)
 
 
 def run(
