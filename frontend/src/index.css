@@ -244,3 +244,59 @@ body {
   color: var(--muted);
   word-break: break-word;
 }
+
+/* Stage-by-stage preview strip — used both during processing (inline
+ * under the progress bar) and as an opt-in overlay on the done view. */
+.stage-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  max-width: 920px;
+  padding: 12px 0;
+}
+
+.stage-thumb {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 110px;
+}
+
+.stage-thumb img {
+  width: 110px;
+  height: 110px;
+  object-fit: cover;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #000;
+}
+
+.stage-thumb figcaption {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+/* Done view: stage strip is an overlay above the toolbar that pushes
+ * the slider up. position:fixed so it sits above the absolute slider. */
+.stage-strip-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 72px;
+  background: rgba(7, 8, 12, 0.92);
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+  overflow-x: auto;
+  backdrop-filter: blur(8px);
+}
+
+.stage-strip-overlay .stage-strip {
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  padding: 0;
+}

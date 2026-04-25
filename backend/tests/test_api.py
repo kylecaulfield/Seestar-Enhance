@@ -70,6 +70,20 @@ def test_process_status_result_flow(synthetic_fits_bytes: bytes) -> None:
         assert before.status_code == 200
         assert before.headers["content-type"].startswith("image/png")
 
+        # Stage previews: status should report a non-empty list of
+        # stages that produced thumbnails, and each name should be
+        # fetchable as a PNG.
+        stages_done = status["stages_done"]
+        assert isinstance(stages_done, list) and len(stages_done) >= 4, stages_done
+        # Pipeline order — load comes before background, etc.
+        assert stages_done[0] == "load"
+        assert "curves" in stages_done
+
+        for stage in stages_done:
+            r = client.get(f"/preview/{job_id}/stage/{stage}")
+            assert r.status_code == 200, f"stage {stage} fetch failed: {r.status_code}"
+            assert r.headers["content-type"].startswith("image/png")
+
         result = client.get(f"/result/{job_id}")
         assert result.status_code == 200
         assert result.headers["content-type"] == "image/png"
@@ -78,4 +92,25 @@ def test_process_status_result_flow(synthetic_fits_bytes: bytes) -> None:
 def test_status_404() -> None:
     with TestClient(app) as client:
         r = client.get("/status/nosuch")
+    assert r.status_code == 404
+
+
+def test_stage_preview_unknown_stage() -> None:
+    """Path-traversal + unknown-name guard.
+
+    The endpoint validates the stage name before consulting the job
+    registry, so we don't need to start a real pipeline (which would
+    leave a worker thread running between tests and race with the
+    next test's BM3D call). A nonexistent job_id is fine here because
+    the stage-name check 404s first.
+    """
+    with TestClient(app) as client:
+        r = client.get("/preview/anyjob/stage/etc-passwd")
+    assert r.status_code == 404
+
+
+def test_stage_preview_unknown_job() -> None:
+    """Valid stage name but unknown job — second 404 path."""
+    with TestClient(app) as client:
+        r = client.get("/preview/nosuch/stage/load")
     assert r.status_code == 404

@@ -77,6 +77,51 @@ def _noop_progress(stage: str, frac: float) -> None:  # noqa: ARG001
     return None
 
 
+def _save_stage_preview(
+    img: np.ndarray,
+    path: Path,
+    size: tuple[int, int] = (300, 300),
+) -> None:
+    """Write a thumbnail PNG of the in-flight pipeline image.
+
+    Pre-stretch stages have luma in [0, 0.05] and would render as a
+    black square. We auto-apply a quick log preview when the image
+    looks linear so users can actually see what each stage is doing.
+    Same approach as `main._save_before_preview`. ~50 KB per thumb.
+    """
+    from PIL import Image as _PILImage
+
+    # Downscale via numpy slicing FIRST, then convert to PIL. Avoids
+    # passing big numpy arrays (potentially non-contiguous views from
+    # the pipeline) through Pillow's `thumbnail()`, which has caused
+    # SIGABRT crashes in repeated within-process calls — likely a
+    # libjpeg/libpng state issue when stacked on top of the API's
+    # earlier PIL operations. Numpy slicing is safe + fast.
+    h, w = img.shape[:2]
+    sh, sw = size
+    step = max(1, min(h // sh, w // sw))
+    sub = np.ascontiguousarray(img[::step, ::step, :3])
+
+    arr = np.clip(sub, 0.0, 1.0).astype(np.float32, copy=True)
+    luma_max = float(arr.mean(axis=-1).max()) if arr.size else 1.0
+    if luma_max < 0.2:
+        # Linear pre-stretch image — apply a log-stretch preview.
+        luma = arr.mean(axis=-1)
+        black = float(np.percentile(luma, 5.0))
+        white = float(np.percentile(luma, 99.9))
+        denom = max(white - black, 1e-6)
+        normalized = np.clip((arr - black) / denom, 0.0, 1.0)
+        arr = np.log1p(normalized * 200.0)
+        peak = float(arr.max()) if arr.size else 1.0
+        if peak > 0:
+            arr = arr / peak
+
+    as_u8 = np.ascontiguousarray(np.clip(arr * 255.0, 0, 255).astype(np.uint8))
+    pil = _PILImage.fromarray(as_u8, mode="RGB")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pil.save(str(path), format="PNG", optimize=True)
+
+
 def run(
     input_fits: PathLike,
     output_png: PathLike,
@@ -84,6 +129,7 @@ def run(
     verbose: bool = False,
     progress: ProgressCallback | None = None,
     dark: np.ndarray | None = None,
+    stage_preview_dir: PathLike | None = None,
 ) -> np.ndarray:
     """Run the full v1 pipeline.
 
@@ -102,8 +148,28 @@ def run(
         Optional callback invoked as (stage_name, fraction_complete). Called
         once with frac=0.0 at the start of each stage and once with frac=1.0
         at its end, plus a final ("done", 1.0).
+    stage_preview_dir : str | Path | None
+        When set, writes a 300×300 thumbnail PNG named ``<stage>.png`` into
+        this directory after each stage runs. Used by the web UI's
+        stage-by-stage preview strip. None (default) skips all dumping.
     """
     cb: ProgressCallback = progress or _noop_progress
+
+    # Stage-preview helper: bound to the configured dir + does nothing
+    # when no dir is set, so the inner pipeline body stays uncluttered.
+    if stage_preview_dir is not None:
+        preview_root = Path(stage_preview_dir)
+        preview_root.mkdir(parents=True, exist_ok=True)
+
+        def dump(stage: str, image: np.ndarray) -> None:
+            try:
+                _save_stage_preview(image, preview_root / f"{stage}.png")
+            except Exception:  # noqa: BLE001 — preview is best-effort
+                logger.exception("stage-preview dump failed for %s", stage)
+    else:
+
+        def dump(stage: str, image: np.ndarray) -> None:  # noqa: ARG001
+            return None
 
     def log(msg: str) -> None:
         logger.info(msg)
@@ -116,6 +182,7 @@ def run(
     if wcs is not None:
         log("  FITS includes valid WCS (SPCC-capable)")
     cb("load", 1.0)
+    dump("load", img)
 
     log(f"[2/{len(_STAGES)}] classify")
     cb("classify", 0.0)
@@ -135,6 +202,7 @@ def run(
         log("[2a] dark-frame subtraction")
         dark_params = params.get("dark_subtract", {})
         img = dark_subtract.process(img, dark=dark, **dark_params)
+        dump("dark_subtract", img)
 
     # Cosmetic: hot-pixel / cosmic-ray rejection. Pre-background so the
     # fit samples aren't biased by single-pixel outliers. Opt-in.
@@ -142,11 +210,13 @@ def run(
     if cosmetic_params is not None:
         log("[3a] cosmetic correction")
         img = cosmetic.process(img, **cosmetic_params)
+        dump("cosmetic", img)
 
     log(f"[3/{len(_STAGES)}] background removal")
     cb("background", 0.0)
     img = background.process(img, **params.get("background", {}))
     cb("background", 1.0)
+    dump("background", img)
 
     # SPCC (v2) runs BETWEEN background and color: the background fit
     # has already removed gradients (so the frame is flat enough for
@@ -160,6 +230,7 @@ def run(
     if spcc_params is not None and wcs is not None:
         log("[3a] SPCC photometric calibration")
         img = spcc.process(img, wcs=wcs, **spcc_params)
+        dump("spcc", img)
     elif spcc_params is not None:
         log("[3a] SPCC: skipped (no WCS in FITS header)")
 
@@ -167,6 +238,7 @@ def run(
     cb("color", 0.0)
     img = color.process(img, **params.get("color", {}))
     cb("color", 1.0)
+    dump("color", img)
 
     # Deconvolution: tighten star PSFs in linear space before the
     # arcsinh stretch turns wide Gaussians into soft bright halos.
@@ -175,11 +247,13 @@ def run(
     if deconv_params is not None:
         log("[4a] star PSF deconvolution")
         img = deconv.process(img, **deconv_params)
+        dump("deconv", img)
 
     log(f"[5/{len(_STAGES)}] stretch")
     cb("stretch", 0.0)
     img = stretch.process(img, **params.get("stretch", {}))
     cb("stretch", 1.0)
+    dump("stretch", img)
 
     # v2 star-split: for targets where star bloat is the main ceiling on
     # stretch aggressiveness (i.e. nebulae), split the frame into a
@@ -193,19 +267,23 @@ def run(
     if stars_params is not None:
         log(f"[5a/{len(_STAGES)}] star/starless split")
         stars_only, img = stars.process(img, **stars_params)
+        dump("stars_split", img)
         if starless_stretch_params is not None:
             log("[5b] additional stretch on starless")
             img = stretch.process(img, **starless_stretch_params)
+            dump("starless_stretch", img)
 
     log(f"[6/{len(_STAGES)}] bm3d denoise (classical)")
     cb("bm3d_denoise", 0.0)
     img = bm3d_denoise.process(img, **params.get("bm3d_denoise", {}))
     cb("bm3d_denoise", 1.0)
+    dump("bm3d_denoise", img)
 
     log(f"[7/{len(_STAGES)}] sharpen")
     cb("sharpen", 0.0)
     img = sharpen.process(img, **params.get("sharpen", {}))
     cb("sharpen", 1.0)
+    dump("sharpen", img)
 
     # CLAHE: local contrast on luma. When star_split is active this
     # lands on the starless layer so stars don't get their cores
@@ -214,17 +292,20 @@ def run(
     if clahe_params is not None:
         log("[7a] CLAHE local contrast")
         img = clahe.process(img, **clahe_params)
+        dump("clahe", img)
 
     log(f"[8/{len(_STAGES)}] curves")
     cb("curves", 0.0)
     img = curves.process(img, **params.get("curves", {}))
     cb("curves", 1.0)
+    dump("curves", img)
 
     # Screen-blend the unmodified stars back onto the heavily-processed
     # starless. Must happen after curves so stars don't get double-boosted.
     if stars_only is not None:
         log("[8a] recombine starless + stars (screen blend)")
         img = stars.recombine(stars_only, img)
+        dump("recombine", img)
 
     log(f"[9/{len(_STAGES)}] export -> {output_png}")
     cb("export", 0.0)

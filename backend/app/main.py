@@ -83,6 +83,11 @@ class Job:
     input_path: Path = field(default_factory=Path)
     output_path: Path = field(default_factory=Path)
     before_path: Path = field(default_factory=Path)
+    # Stage-preview thumbnails land in `stages_dir/<stage>.png` as the
+    # pipeline runs. `stages_done` lists the names that have a thumb on
+    # disk so the UI knows which to fetch (and in what order).
+    stages_dir: Path = field(default_factory=Path)
+    stages_done: list[str] = field(default_factory=list)
     classification: str | None = None
     # Unix timestamp when the job reached a terminal state (done/error).
     # None while queued/running. Used by the reaper to enforce the TTL.
@@ -97,6 +102,47 @@ _JOBS_LOCK = threading.Lock()
 # the reaper runs frequently enough that disk doesn't accumulate.
 _JOB_TTL_SECONDS = 3600
 _REAPER_INTERVAL_SECONDS = 60
+
+
+# Canonical execution order of stage-preview thumbnails. The UI uses
+# this to display the strip left-to-right in pipeline order rather than
+# whatever filesystem ordering ls returns. Stages not listed here (none
+# right now) would be appended at the end.
+_STAGE_PREVIEW_ORDER = (
+    "load",
+    "dark_subtract",
+    "cosmetic",
+    "background",
+    "spcc",
+    "color",
+    "deconv",
+    "stretch",
+    "stars_split",
+    "starless_stretch",
+    "bm3d_denoise",
+    "sharpen",
+    "clahe",
+    "curves",
+    "recombine",
+)
+
+
+def _refresh_stages_done(job: Job) -> None:
+    """Sweep the job's stage-preview directory and rebuild stages_done.
+
+    Filesystem-driven so the pipeline doesn't need to call back into
+    the API layer; the previews are the source of truth.
+    """
+    if not job.stages_dir.is_dir():
+        return
+    seen = {p.stem for p in job.stages_dir.glob("*.png")}
+    ordered = [s for s in _STAGE_PREVIEW_ORDER if s in seen]
+    extras = sorted(seen - set(_STAGE_PREVIEW_ORDER))
+    new = ordered + extras
+    with _JOBS_LOCK:
+        # Avoid a write when nothing has changed — keeps polling cheap.
+        if new != job.stages_done:
+            job.stages_done = new
 
 
 def _save_before_preview(fits_path: Path, png_path: Path) -> None:
@@ -134,6 +180,14 @@ def _run_job(job_id: str) -> None:
             with _JOBS_LOCK:
                 job.stage = stage
                 job.progress = float(frac)
+            # The pipeline writes <stages_dir>/<stage>.png after each
+            # stage. We refresh stages_done at frac=1.0 (stage end)
+            # only — saves O(N) stat calls per progress tick. Critical
+            # to call this OUTSIDE the lock above: _refresh_stages_done
+            # acquires _JOBS_LOCK itself, and threading.Lock() is not
+            # reentrant.
+            if frac >= 0.999:
+                _refresh_stages_done(job)
 
         # Classify up front so the UI can surface the picked profile in
         # /status while the long BM3D stage runs. pipeline.run() will pick
@@ -153,7 +207,12 @@ def _run_job(job_id: str) -> None:
             job.output_path,
             profile=job.classification,
             progress=progress,
+            stage_preview_dir=job.stages_dir,
         )
+
+        # Final sweep — `recombine` and `export` may produce thumbs
+        # after the last progress callback fires.
+        _refresh_stages_done(job)
 
         with _JOBS_LOCK:
             job.status = "done"
@@ -297,6 +356,7 @@ async def process_endpoint(file: UploadFile) -> dict[str, str]:
     input_path = job_dir / "input.fits"
     output_path = job_dir / "output.png"
     before_path = job_dir / "before.png"
+    stages_dir = job_dir / "stages"
 
     # Stream to disk while enforcing a size cap and validating the first
     # bytes look like a FITS primary HDU. A leading buffer accumulates
@@ -341,6 +401,7 @@ async def process_endpoint(file: UploadFile) -> dict[str, str]:
         input_path=input_path,
         output_path=output_path,
         before_path=before_path,
+        stages_dir=stages_dir,
     )
     with _JOBS_LOCK:
         _JOBS[job_id] = job
@@ -355,14 +416,21 @@ def status_endpoint(job_id: str) -> dict[str, object]:
         job = _JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="unknown job")
-    return {
-        "job_id": job.id,
-        "status": job.status,
-        "stage": job.stage,
-        "progress": job.progress,
-        "classification": job.classification,
-        "error": job.error,
-    }
+    # Refresh under the read path too: jobs run in a worker thread but
+    # the poll loop on the UI wants thumbnails as soon as they land.
+    # Cheap O(stages) glob; only triggered while the job is running.
+    if job.status == "running":
+        _refresh_stages_done(job)
+    with _JOBS_LOCK:
+        return {
+            "job_id": job.id,
+            "status": job.status,
+            "stage": job.stage,
+            "progress": job.progress,
+            "classification": job.classification,
+            "error": job.error,
+            "stages_done": list(job.stages_done),
+        }
 
 
 @app.get("/result/{job_id}")
@@ -391,6 +459,34 @@ def preview_before_endpoint(job_id: str) -> FileResponse:
     if not job.before_path.is_file():
         raise HTTPException(status_code=409, detail="preview not ready")
     return FileResponse(job.before_path, media_type="image/png")
+
+
+# Allow only the canonical stage names through to the filesystem so a
+# crafted /preview/{job}/stage/../../etc/passwd request can't escape the
+# job's stages_dir. Easier than doing path resolution + a containment
+# check, and the set is tiny.
+_VALID_STAGE_NAMES = frozenset(_STAGE_PREVIEW_ORDER)
+
+
+@app.get("/preview/{job_id}/stage/{stage}")
+def preview_stage_endpoint(job_id: str, stage: str) -> FileResponse:
+    """Per-stage thumbnail PNG dumped during pipeline execution.
+
+    The thumbnails (300x300 PNG, ~50 KB each) are written by
+    `pipeline.run()` after each stage runs. The frontend's stage-strip
+    component fetches each one as it lands. Returns 404 for an unknown
+    job/stage and 409 if the stage hasn't produced a thumbnail yet.
+    """
+    if stage not in _VALID_STAGE_NAMES:
+        raise HTTPException(status_code=404, detail="unknown stage")
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    thumb_path = job.stages_dir / f"{stage}.png"
+    if not thumb_path.is_file():
+        raise HTTPException(status_code=409, detail="stage preview not ready")
+    return FileResponse(thumb_path, media_type="image/png")
 
 
 if _STATIC_DIR.is_dir():

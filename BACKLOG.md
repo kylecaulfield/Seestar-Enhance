@@ -390,8 +390,17 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
   another buttons. Dark astrophotography theme.
 - [x] **500 ms status polling with cleanup on unmount / completion** —
   _shipped._
-- [ ] Stage-by-stage preview strip: show the image at each intermediate
-  stage so users can see what each step is doing.
+- [x] **Stage-by-stage preview strip** — _Shipped._ `pipeline.run()`
+  takes an opt-in `stage_preview_dir` parameter that writes a 300×300
+  thumbnail PNG named `<stage>.png` after every stage runs (auto-
+  applies a log-stretch preview when the stage output is still
+  linear, so pre-stretch thumbs aren't black). The web UI's job
+  status surfaces a `stages_done` list, and a new
+  `/preview/{job_id}/stage/{name}` endpoint serves each thumbnail.
+  The SPA renders the strip below the progress bar during processing
+  and as an opt-in overlay on the done view (Show stages button).
+  ~1.1 MB of thumbnails per job, cleaned up by the existing TTL
+  reaper.
 - [ ] ~~Parameter tweak panel that mirrors `profiles.py`~~ — **explicit
   non-goal per v1 UX spec ("no settings, no sliders, no advanced panel").**
 - [ ] Persist uploaded files in the browser's OPFS or IndexedDB so a

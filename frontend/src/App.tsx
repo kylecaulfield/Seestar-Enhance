@@ -13,6 +13,7 @@ type Status = {
   progress: number;
   classification: string | null;
   error: string | null;
+  stages_done: string[];
 };
 
 const STAGE_LABELS: Record<string, string> = {
@@ -27,10 +28,41 @@ const STAGE_LABELS: Record<string, string> = {
   curves: "Applying curves",
   export: "Writing PNG",
   done: "Done",
+  cosmetic: "Hot-pixel cleanup",
+  dark_subtract: "Dark frame",
+  spcc: "SPCC calibration",
+  deconv: "Deconvolution",
+  stars_split: "Star split",
+  starless_stretch: "Starless stretch",
+  clahe: "CLAHE",
+  recombine: "Recombine stars",
 };
 
 function stageLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage;
+}
+
+type StageStripProps = {
+  jobId: string;
+  stages: string[];
+};
+
+function StageStrip({ jobId, stages }: StageStripProps) {
+  if (stages.length === 0) return null;
+  return (
+    <div className="stage-strip" aria-label="Pipeline stages">
+      {stages.map((stage) => (
+        <figure key={stage} className="stage-thumb">
+          <img
+            src={`${API_BASE}/preview/${jobId}/stage/${stage}`}
+            alt={stageLabel(stage)}
+            loading="lazy"
+          />
+          <figcaption>{stageLabel(stage)}</figcaption>
+        </figure>
+      ))}
+    </div>
+  );
 }
 
 export default function App() {
@@ -40,6 +72,7 @@ export default function App() {
   const [dragActive, setDragActive] = useState(false);
   const [resultUrl, setResultUrl] = useState<string>("");
   const [beforeUrl, setBeforeUrl] = useState<string>("");
+  const [showStages, setShowStages] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -52,6 +85,7 @@ export default function App() {
     setErrorMsg("");
     setResultUrl("");
     setBeforeUrl("");
+    setShowStages(false);
     setView("drop");
   }, []);
 
@@ -70,6 +104,7 @@ export default function App() {
       progress: 0,
       classification: null,
       error: null,
+      stages_done: [],
     });
 
     try {
@@ -179,6 +214,8 @@ export default function App() {
 
   if (view === "processing") {
     const pct = Math.round((status?.progress ?? 0) * 100);
+    const jobId = status?.job_id ?? "";
+    const stagesDone = status?.stages_done ?? [];
     return (
       <main className="page page--center">
         <div className="processing">
@@ -192,12 +229,17 @@ export default function App() {
               Profile · <span className="accent">{status.classification}</span>
             </div>
           )}
+          {jobId && stagesDone.length > 0 && (
+            <StageStrip jobId={jobId} stages={stagesDone} />
+          )}
         </div>
       </main>
     );
   }
 
   if (view === "done") {
+    const jobId = status?.job_id ?? "";
+    const stagesDone = status?.stages_done ?? [];
     return (
       <main className="page page--done">
         <div className="result-wrap">
@@ -219,10 +261,23 @@ export default function App() {
             style={{ height: "100%", width: "100%" }}
           />
         </div>
+        {showStages && jobId && stagesDone.length > 0 && (
+          <div className="stage-strip-overlay">
+            <StageStrip jobId={jobId} stages={stagesDone} />
+          </div>
+        )}
         <div className="toolbar">
           <a className="btn btn-primary" href={resultUrl} download>
             Download PNG
           </a>
+          {stagesDone.length > 0 && (
+            <button
+              className="btn btn-ghost"
+              onClick={() => setShowStages((v) => !v)}
+            >
+              {showStages ? "Hide stages" : "Show stages"}
+            </button>
+          )}
           <button className="btn btn-ghost" onClick={reset}>
             Process another
           </button>

@@ -203,10 +203,18 @@ docker run --rm -p 8000:8000 seestar-enhance
    to open a file picker). Only `.fit`, `.fits`, and `.fts` are accepted.
 2. A full-screen progress view shows the current stage name and an
    overall bar. The UI polls `/status/{job_id}` every 500ms.
-3. When the pipeline finishes, a **before/after slider** appears over
+3. While the pipeline runs, a **stage-by-stage preview strip** below
+   the progress bar fills in left-to-right with thumbnails of the
+   image after each stage (load → background → color → stretch →
+   denoise → curves, etc.). Useful for watching the "reveal moment"
+   at the stretch step and for diagnosing which stage produces a
+   surprising look.
+4. When the pipeline finishes, a **before/after slider** appears over
    the full viewport. Drag the handle to compare a simple log-stretched
-   preview of the raw input against the enhanced result.
-4. **Download PNG** saves the 16-bit RGB output. **Process another**
+   preview of the raw input against the enhanced result. The
+   **Show stages** button on the toolbar reopens the stage strip as
+   an overlay above the slider.
+5. **Download PNG** saves the 16-bit RGB output. **Process another**
    returns to the drop zone.
 
 There are no settings, no sliders, no profile picker. The backend
@@ -494,11 +502,12 @@ function of your CPU, not your GPU.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET  | `/health`                  | Liveness probe, returns `{"status": "ok"}`. |
-| POST | `/process`                 | Multipart FITS upload. Starts a background pipeline job, returns `{"job_id": "…"}`. |
-| GET  | `/status/{job_id}`         | `{status, stage, progress 0..1, classification, error}`. `status` is `queued`, `running`, `done`, or `error`. |
-| GET  | `/result/{job_id}`         | The processed 16-bit RGB PNG. 409 if the job hasn't finished. |
-| GET  | `/preview/{job_id}/before` | A simple log-stretched 8-bit preview of the input, for the slider. |
+| GET  | `/health`                          | Liveness probe, returns `{"status": "ok"}`. |
+| POST | `/process`                         | Multipart FITS upload. Starts a background pipeline job, returns `{"job_id": "…"}`. |
+| GET  | `/status/{job_id}`                 | `{status, stage, progress 0..1, classification, error, stages_done}`. `status` is `queued`, `running`, `done`, or `error`. `stages_done` is the ordered list of pipeline stages that have produced a thumbnail so far. |
+| GET  | `/result/{job_id}`                 | The processed 16-bit RGB PNG. 409 if the job hasn't finished. |
+| GET  | `/preview/{job_id}/before`         | A simple log-stretched 8-bit preview of the input, for the slider. |
+| GET  | `/preview/{job_id}/stage/{stage}`  | A 300×300 thumbnail PNG of the in-flight image after a named stage runs. The frontend's stage-strip renders these as the pipeline progresses. 404 for unknown stage names; 409 while the named stage is still in flight. |
 
 Job state lives in an in-process `dict` and pipelines run in a bounded
 `ThreadPoolExecutor` (2 workers). No Celery, no Redis — v1 is a single
