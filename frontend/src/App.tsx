@@ -320,6 +320,41 @@ export default function App() {
             />
           </div>
 
+          <section className="intro-panel" aria-label="About this terminal">
+            <div className="intro-grid">
+              <div className="intro-block">
+                <h2 className="intro-heading">Mission Brief</h2>
+                <p className="intro-body">
+                  Drop a single FITS frame from a ZWO Seestar S30 / S50.
+                  The pipeline auto-classifies the target (nebula,
+                  galaxy, cluster, or globular), runs nine classical
+                  enhancement stages — background subtraction,
+                  photometric colour calibration against Gaia DR3,
+                  arcsinh stretch, BM3D denoise, edge-aware sharpen,
+                  curves — and returns a 16-bit PNG. Select TIFF or
+                  float32 FITS in the format selector to preserve full
+                  pipeline precision for further work in PixInsight or
+                  Siril.
+                </p>
+              </div>
+              <div className="intro-block">
+                <h2 className="intro-heading">Operating Procedure</h2>
+                <ol className="intro-steps">
+                  <li>Deposit the FITS file in the orange field above.</li>
+                  <li>
+                    Track stage-by-stage telemetry while the pipeline
+                    engages.
+                  </li>
+                  <li>
+                    Scrub the before / after slider to inspect the
+                    enhancement.
+                  </li>
+                  <li>Beam down the result in the format you selected.</li>
+                </ol>
+              </div>
+            </div>
+          </section>
+
           <div className="format-row" onClick={(e) => e.stopPropagation()}>
             <label className="format-label" htmlFor="format-select">
               Output Format

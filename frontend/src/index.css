@@ -230,6 +230,79 @@ body {
   transform: translateY(1px);
 }
 
+/* Intro panel — sits between the drop zone and the format row on the
+ * landing view. Two side-by-side LCARS blocks: a "Mission Brief"
+ * paragraph and an "Operating Procedure" numbered list. Each block has
+ * a fat coloured stripe down the left edge (the LCARS frame motif at
+ * smaller scale) so the panel reads as console copy, not body text. */
+.intro-panel {
+  width: min(720px, 92vw);
+  margin-top: 24px;
+}
+
+.intro-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 600px) {
+  .intro-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.intro-block {
+  border-left: 8px solid var(--lcars-lavender);
+  border-radius: 8px 18px 18px 8px;
+  background: rgba(204, 153, 204, 0.06);
+  padding: 14px 18px 16px;
+}
+
+.intro-block:nth-child(2) {
+  border-left-color: var(--lcars-blue);
+  background: rgba(153, 204, 255, 0.05);
+}
+
+.intro-heading {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--lcars-cream);
+}
+
+.intro-block:nth-child(2) .intro-heading {
+  color: var(--lcars-blue);
+}
+
+.intro-body {
+  margin: 0;
+  color: var(--lcars-peach);
+  font-size: 13px;
+  line-height: 1.55;
+  letter-spacing: 0.03em;
+}
+
+.intro-steps {
+  margin: 0;
+  padding-left: 22px;
+  color: var(--lcars-peach);
+  font-size: 13px;
+  line-height: 1.55;
+  letter-spacing: 0.03em;
+}
+
+.intro-steps li {
+  margin-bottom: 4px;
+}
+
+.intro-steps li::marker {
+  color: var(--lcars-orange);
+  font-weight: 700;
+}
+
 /* Output-format chooser on the drop view. Sits below the drop zone so
  * it doesn't fight for tap area with the file picker. The
  * stopPropagation in the JSX prevents a click on the row from
