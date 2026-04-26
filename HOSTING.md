@@ -233,33 +233,18 @@ docker image prune -f
 
 ## 2. Unraid tutorial
 
-Tested on Unraid 6.12+ with the Community Applications and Compose
-Manager plugins. If you're on an older Unraid, upgrade first — Compose
-Manager is the cleanest way to run multi-container apps there.
+Tested on Unraid 6.12+. The image is one container; **Add Container**
+is all you need — no Compose Manager, no `git clone`, no Node
+toolchain on the Unraid box.
 
-> **TL;DR.** Pull the prebuilt image from `ghcr.io/kylecaulfield/seestar-enhance:latest`
-> and you're one Compose Up away from a working install. No `git clone`,
-> no local build, no Node toolchain on the Unraid box.
->
 > Every code-only commit to `main` triggers a fresh multi-arch
 > (amd64 + arm64) build via the GitHub Actions workflow at
 > `.github/workflows/docker.yml`. Documentation-only commits skip the
-> rebuild — see the path filter in that file. So a `docker pull` always
-> gives you the latest behaviour without busy-rebuilding for README
-> tweaks.
+> rebuild — see the path filter in that file. So pulling `:latest`
+> always gives you the latest behaviour without busy-rebuilding for
+> README tweaks.
 
-### 2.1 One-time Unraid setup
-
-1. **Install Community Applications (CA)** if you haven't already.
-   Unraid GUI → **Plugins** → **Install Plugin** → paste
-   `https://raw.githubusercontent.com/Squidly271/community.applications/master/plugins/community.applications.plg`
-   → **Install**.
-2. **Install Compose Manager.** Apps tab → search **Compose Manager**
-   (by *dcflachs*) → **Install**.
-3. **Install User Scripts** (optional but useful for the auto-update
-   cron in §2.7). Apps → search **User Scripts** → **Install**.
-
-### 2.2 Create the appdata folder
+### 2.1 Make the appdata folder
 
 Unraid convention is to keep per-app config under
 `/mnt/user/appdata/<app>`. Open the terminal (top-right icon on the
@@ -267,94 +252,81 @@ Unraid GUI) or SSH in:
 
 ```sh
 mkdir -p /mnt/user/appdata/seestar-enhance/jobs
-```
-
-That's all that's needed in appdata — the image bundles its own code,
-and the only mount-worthy state is the per-job temp directory used by
-the pipeline (so jobs survive a container restart).
-
-If you want to drop FITS files onto the server for the included CLI to
-process, also make a `seestar` user share in the Unraid GUI →
-**Shares** → **Add Share** → name `seestar`. The compose mounts it as
-`/app/samples/` inside the container. (Optional — you can also just
-upload through the web UI.)
-
-### 2.3 Register the stack in Compose Manager
-
-1. Unraid GUI → **Docker** tab → scroll down → **Compose Manager** →
-   **Add New Stack**.
-2. Name it `seestar-enhance`.
-3. Click the gear icon next to the stack → **Edit Stack** → **Compose
-   File**.
-4. Paste:
-
-   ```yaml
-   services:
-     seestar-enhance:
-       image: ghcr.io/kylecaulfield/seestar-enhance:latest
-       container_name: seestar-enhance
-       ports:
-         - "8000:8000"
-       volumes:
-         # Per-job temp dir. Keeping it on appdata means jobs survive
-         # a container restart (the in-memory job dict is rebuilt by
-         # the orphan-sweep on startup).
-         - /mnt/user/appdata/seestar-enhance/jobs:/tmp/seestar-enhance-jobs
-         # Optional: bind a FITS share so the CLI can process files
-         # without uploading. Drop or rename if not needed.
-         - /mnt/user/seestar:/app/samples
-       environment:
-         - PYTHONUNBUFFERED=1
-         # CORS allowlist. Leave the default for LAN-only use behind
-         # the nginx-proxy-manager pattern in §2.5; set to your real
-         # SPA origin if fronting with a custom hostname. The literal
-         # "*" works but is only safe behind a reverse proxy that does
-         # its own auth.
-         - ALLOWED_ORIGINS=http://localhost:8000,http://127.0.0.1:8000
-       restart: unless-stopped
-       healthcheck:
-         test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
-         interval: 30s
-         timeout: 5s
-         retries: 5
-   ```
-
-   The image serves both API and SPA on port 8000 — there's no
-   separate frontend container any more (FastAPI mounts the built
-   React bundle at `/`).
-
-5. Save the compose file.
-
-The image is non-root (UID 10001). If you're using a tight Unraid
-share permission, make sure `/mnt/user/appdata/seestar-enhance/jobs`
-is writable by that UID:
-
-```sh
 chown -R 10001:10001 /mnt/user/appdata/seestar-enhance
 ```
 
-### 2.4 Start the stack
+The image runs non-root (UID 10001), so the `chown` matters — without
+it, the container can't write its per-job temp files and uploads will
+fail. Mounting this directory means jobs survive a container restart.
 
-1. Back on the Compose Manager screen, click **Compose Up** on the
-   `seestar-enhance` stack.
-2. First run pulls the multi-arch image (~600 MB compressed) from
-   ghcr.io. Subsequent updates are layer-cached and only download the
-   delta — typically ~50 MB per release.
-3. When the container shows **Started** (and the healthcheck flips to
-   `healthy` after ~30s), open a browser on the LAN:
-   - Web UI: `http://<UNRAID-IP>:8000`
-   - Health probe: `http://<UNRAID-IP>:8000/health`
+If you want to drop FITS files onto the server for the included CLI
+to process, also make a `seestar` user share in the Unraid GUI →
+**Shares** → **Add Share** → name `seestar`. (Optional — uploads
+through the web UI work without it.)
 
-### 2.5 Expose to the LAN with nicer URLs (optional)
+### 2.2 Add the container
 
-If you want `http://seestar.local` instead of `:8000`, the typical
-Unraid pattern is **NGINX Proxy Manager** (also from CA — easier than
-SWAG for one-off setups):
+Unraid GUI → **Docker** tab → scroll to the bottom → **Add
+Container**. Fill in the form:
+
+| Field | Value |
+| --- | --- |
+| Name | `seestar-enhance` |
+| Repository | `ghcr.io/kylecaulfield/seestar-enhance:latest` |
+| Network Type | `Bridge` |
+| Console shell command | `sh` |
+| Privileged | off |
+| WebUI | `http://[IP]:[PORT:8000]/` |
+
+Then add **one port mapping** (click **Add another Path, Port,
+Variable, Label or Device** → choose **Port**):
+
+| Config Type | Name | Container Port | Host Port | Connection Type |
+| --- | --- | --- | --- | --- |
+| Port | Web | `8000` | `8000` | TCP |
+
+Add **two path mappings** (click **Add another...** → choose
+**Path**):
+
+| Name | Container Path | Host Path | Access |
+| --- | --- | --- | --- |
+| Job state | `/tmp/seestar-enhance-jobs` | `/mnt/user/appdata/seestar-enhance/jobs` | Read/Write |
+| FITS samples (optional) | `/app/samples` | `/mnt/user/seestar` | Read/Write |
+
+Add **one variable** (Add another → **Variable**):
+
+| Name | Key | Value |
+| --- | --- | --- |
+| CORS allowlist | `ALLOWED_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` |
+
+Set this to your real SPA origin if fronting with a custom hostname
+(see §2.4). The literal `*` works behind a reverse proxy that does
+its own auth, but isn't safe to expose directly.
+
+Click **Apply**. Unraid pulls the multi-arch image (~600 MB
+compressed) and starts the container.
+
+### 2.3 First run
+
+When the container's status flips to **healthy** (~30 s after the pull
+finishes), click the WebUI button (or just open `http://<UNRAID-IP>:8000`
+in a LAN browser).
+
+The image serves both API and SPA on port 8000 — there's no separate
+frontend container (FastAPI mounts the built React bundle at `/`).
+Drop a FITS file on the page, watch the stage strip, download the
+result.
+
+### 2.4 Expose with a nicer URL (optional)
+
+If you want `http://seestar.local` instead of `:8000`, install
+**NGINX Proxy Manager** from Community Apps (easier than SWAG for
+one-off setups):
 
 1. Install NGINX Proxy Manager from CA. Accept defaults, note the
    admin port (default 81).
-2. Open `http://<UNRAID-IP>:81`, log in with the default creds, change
-   the password.
+2. Open `http://<UNRAID-IP>:81`, log in with the default creds,
+   change the password.
 3. **Hosts → Proxy Hosts → Add Proxy Host:**
    - Domain Names: `seestar.local` (or your DNS name).
    - Scheme: `http`, Forward Hostname: `<UNRAID-IP>`, Forward Port:
@@ -362,15 +334,14 @@ SWAG for one-off setups):
    - Enable **Block Common Exploits** and **Websockets Support**.
    - SSL tab: request a Let's Encrypt cert if the domain is publicly
      resolvable, otherwise leave as HTTP for LAN-only use.
-4. If you set a custom hostname, update `ALLOWED_ORIGINS` in the
-   compose file to match — e.g.
-   `ALLOWED_ORIGINS=https://seestar.local`.
+4. Update `ALLOWED_ORIGINS` on the container (Docker tab → click the
+   container → **Edit**) to match the proxied origin — e.g.
+   `https://seestar.local`. Apply, the container restarts.
 
-### 2.6 Put FITS files where the container can see them
+### 2.5 CLI on bound FITS files
 
-Drop FITS files into `/mnt/user/seestar/` (the share you mounted at
-`/app/samples/` in the compose). To run the CLI end-to-end on a sample
-from the Unraid terminal:
+If you mounted `/mnt/user/seestar`, you can drive the CLI from the
+Unraid terminal:
 
 ```sh
 docker exec -it seestar-enhance \
@@ -390,33 +361,31 @@ docker exec -it seestar-enhance \
     --jobs 0      # one worker per CPU core
 ```
 
-### 2.7 Updating
+### 2.6 Updating
 
-Every code-only commit to `main` rebuilds the image and republishes
-`:latest` to ghcr.io. To pull the new image and restart the container:
+Every code-only commit to `main` republishes `:latest` to ghcr.io.
 
-```sh
-docker pull ghcr.io/kylecaulfield/seestar-enhance:latest
-docker compose -p seestar-enhance up -d
+**Manual update from the GUI:** Docker tab → click the container →
+**Force Update**. Unraid pulls the new image and restarts.
+
+**Automated daily update:** install **CA Auto Update Applications**
+from Community Apps. Configure it to update `seestar-enhance` on a
+daily cron — it does the same `docker pull` + restart automatically
+when the digest changes (no-op when it hasn't).
+
+### Pinning to a specific release
+
+If you don't want auto-updates, set the Repository field on the
+container to a SHA tag instead:
+
+```
+ghcr.io/kylecaulfield/seestar-enhance:sha-abc1234
 ```
 
-Or, in the Compose Manager UI: click the stack → **Compose Down** →
-**Compose Up**.
-
-For automation, drop this in a User Script (**Settings** → **User
-Scripts** → **Add New Script** → set a daily or weekly cron):
-
-```sh
-#!/bin/bash
-set -eu
-docker pull ghcr.io/kylecaulfield/seestar-enhance:latest
-# Compose Manager projects live under /boot/config/plugins.
-cd /boot/config/plugins/compose.manager/projects/seestar-enhance
-docker compose up -d
-```
-
-The User Script is idempotent — if the digest hasn't changed, `docker
-pull` is a no-op and `compose up -d` doesn't restart the container.
+Every build publishes a `sha-<7>` tag in addition to `latest`, so you
+can roll back to any prior commit by editing the container's
+Repository field. Once we cut semver releases, `v1.2.3` and floating
+`v1.2` / `v1` tags will be available too.
 
 ### Pinning to a specific release
 
@@ -431,10 +400,11 @@ can roll back to any prior commit by changing this line and running
 **Compose Down** + **Compose Up**. Once we cut semver releases,
 `v1.2.3` and floating `v1.2` / `v1` tags will be available too.
 
-### 2.8 Troubleshooting
+### 2.7 Troubleshooting
 
-- **Port collision on 8000.** Edit the compose file's `ports:` mapping
-  — e.g. `"8010:8000"`.
+- **Port collision on 8000.** Edit the container (Docker tab → click
+  → **Edit**) and change the host-side port mapping — e.g. `8010` →
+  `8000`. The container port stays 8000.
 - **Image pull fails.** ghcr.io is rate-limited for unauthenticated
   pulls (~100/hour per IP). On a busy NAT'd LAN the limit can hit
   unexpectedly. Authenticate with a GitHub PAT:
@@ -454,7 +424,7 @@ can roll back to any prior commit by changing this line and running
   `backend/app/main.py` and rebuild from source (the prebuilt image
   uses the default of 6).
 
-### 2.9 Backups
+### 2.8 Backups
 
 Unraid's native CA Backup/Restore Appdata plugin is the easy path:
 add `/mnt/user/appdata/seestar-enhance` to its backup set. Per-job
