@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ReactCompareSlider, ReactCompareSliderImage } from "react-compare-slider";
 
 // Same-origin in prod (FastAPI serves the SPA); vite proxy in dev.
@@ -16,30 +16,65 @@ type Status = {
   stages_done: string[];
 };
 
+// LCARS-flavoured stage labels. Brief enough to fit the bar.
 const STAGE_LABELS: Record<string, string> = {
-  queued: "Queued",
-  load: "Loading FITS",
-  classify: "Classifying image",
-  background: "Removing sky gradient",
-  color: "Balancing color",
-  stretch: "Stretching",
-  bm3d_denoise: "Denoising",
-  sharpen: "Sharpening",
-  curves: "Applying curves",
-  export: "Writing PNG",
-  done: "Done",
-  cosmetic: "Hot-pixel cleanup",
-  dark_subtract: "Dark frame",
-  spcc: "SPCC calibration",
-  deconv: "Deconvolution",
-  stars_split: "Star split",
-  starless_stretch: "Starless stretch",
-  clahe: "CLAHE",
-  recombine: "Recombine stars",
+  queued: "Standing By",
+  load: "Subspace Buffer Load",
+  classify: "Spectral Class Survey",
+  background: "Sky Gradient Compensator",
+  color: "Chrominance Calibration",
+  stretch: "Tonal Decompression",
+  bm3d_denoise: "Noise Filter Bank",
+  sharpen: "Edge Acuity Pass",
+  curves: "Tonal Curve Engaged",
+  export: "Output Buffer Write",
+  done: "Operation Complete",
+  cosmetic: "Hot-Pixel Sweep",
+  dark_subtract: "Dark Frame Subtract",
+  spcc: "Photometric Calibration",
+  deconv: "PSF Deconvolution",
+  stars_split: "Stellar / Diffuse Split",
+  starless_stretch: "Diffuse Lift",
+  clahe: "Local Contrast",
+  recombine: "Stellar Recombine",
 };
 
 function stageLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage;
+}
+
+// Star Trek-style stardate. Loosely TNG era — January 1, 2300 ≈ stardate
+// 50000.0 in the on-screen system, with each year ≈ 1000 stardate units.
+// Fractional digits = the day-of-year. We pin "now" to JS Date so the
+// number ticks while the user has the page open.
+function useStardate(): string {
+  const [d, setD] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setD(new Date()), 60000);
+    return () => clearInterval(id);
+  }, []);
+  return useMemo(() => {
+    const year = d.getUTCFullYear();
+    const startOfYear = Date.UTC(year, 0, 1);
+    const dayOfYear = (d.getTime() - startOfYear) / (1000 * 60 * 60 * 24);
+    const integer = (year - 2300) * 1000;
+    const fractional = (dayOfYear / 365.25) * 1000;
+    return (integer + fractional).toFixed(1);
+  }, [d]);
+}
+
+function LcarsFrame({ section }: { section: string }) {
+  const stardate = useStardate();
+  return (
+    <div className="lcars-frame" aria-hidden>
+      <div className="lcars-elbow" />
+      <div className="lcars-bar">
+        <span>USS Seestar · {section}</span>
+        <span className="lcars-bar-stardate">Stardate {stardate}</span>
+      </div>
+      <div className="lcars-cap" />
+    </div>
+  );
 }
 
 type StageStripProps = {
@@ -48,10 +83,6 @@ type StageStripProps = {
 };
 
 function StageStrip({ jobId, stages }: StageStripProps) {
-  // Hide thumbs that fail to load — happens transiently while the worker
-  // is still writing the file (server returns 409 if the worker hasn't
-  // produced the thumb yet, or the atomic rename hasn't happened). The
-  // next /status poll re-includes the stage and the <img> retries.
   const onImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
     e.currentTarget.style.visibility = "hidden";
   };
@@ -61,7 +92,7 @@ function StageStrip({ jobId, stages }: StageStripProps) {
 
   if (stages.length === 0) return null;
   return (
-    <div className="stage-strip" aria-label="Pipeline stages">
+    <div className="stage-strip" aria-label="Pipeline telemetry">
       {stages.map((stage) => (
         <figure key={stage} className="stage-thumb">
           <img
@@ -171,7 +202,7 @@ export default function App() {
       if (!file) return;
       const name = file.name.toLowerCase();
       if (!(name.endsWith(".fit") || name.endsWith(".fits") || name.endsWith(".fts"))) {
-        setErrorMsg("Please drop a .fit, .fits, or .fts file.");
+        setErrorMsg("Subspace transfer rejected: expected .fit, .fits, or .fts");
         setView("error");
         return;
       }
@@ -197,31 +228,34 @@ export default function App() {
 
   if (view === "drop") {
     return (
-      <main className="page">
-        <div
-          className={`drop-zone${dragActive ? " drop-zone--active" : ""}`}
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onClick={() => fileInputRef.current?.click()}
-          role="button"
-          tabIndex={0}
-        >
-          <div className="drop-icon" aria-hidden>
-            ⬈
+      <>
+        <LcarsFrame section="Awaiting Image File" />
+        <main className="page">
+          <div
+            className={`drop-zone${dragActive ? " drop-zone--active" : ""}`}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onClick={() => fileInputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+          >
+            <div className="drop-icon" aria-hidden>
+              ⬈
+            </div>
+            <div className="drop-title">Awaiting Image File</div>
+            <div className="drop-sub">Deposit FITS · or tap to browse</div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".fit,.fits,.fts"
+              className="hidden-input"
+              onChange={(e) => onPick(e.target.files?.[0])}
+            />
           </div>
-          <div className="drop-title">Drop your Seestar FITS file here</div>
-          <div className="drop-sub">or click to browse</div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".fit,.fits,.fts"
-            className="hidden-input"
-            onChange={(e) => onPick(e.target.files?.[0])}
-          />
-        </div>
-        <div className="brand">Seestar Enhance</div>
-      </main>
+          <div className="brand">USS Seestar · Image Enhancement Subsystem</div>
+        </main>
+      </>
     );
   }
 
@@ -230,23 +264,26 @@ export default function App() {
     const jobId = status?.job_id ?? "";
     const stagesDone = status?.stages_done ?? [];
     return (
-      <main className="page page--center">
-        <div className="processing">
-          <div className="spinner" aria-hidden />
-          <div className="processing-title">{stageLabel(status?.stage ?? "queued")}</div>
-          <div className="processing-bar" aria-hidden>
-            <div className="processing-bar-fill" style={{ width: `${pct}%` }} />
-          </div>
-          {status?.classification && (
-            <div className="processing-meta">
-              Profile · <span className="accent">{status.classification}</span>
+      <>
+        <LcarsFrame section="Pipeline Engaged" />
+        <main className="page page--center">
+          <div className="processing">
+            <div className="spinner" aria-hidden />
+            <div className="processing-title">{stageLabel(status?.stage ?? "queued")}</div>
+            <div className="processing-bar" aria-hidden>
+              <div className="processing-bar-fill" style={{ width: `${pct}%` }} />
             </div>
-          )}
-          {jobId && stagesDone.length > 0 && (
-            <StageStrip jobId={jobId} stages={stagesDone} />
-          )}
-        </div>
-      </main>
+            {status?.classification && (
+              <div className="processing-meta">
+                Profile · <span className="accent">{status.classification}</span>
+              </div>
+            )}
+            {jobId && stagesDone.length > 0 && (
+              <StageStrip jobId={jobId} stages={stagesDone} />
+            )}
+          </div>
+        </main>
+      </>
     );
   }
 
@@ -254,60 +291,66 @@ export default function App() {
     const jobId = status?.job_id ?? "";
     const stagesDone = status?.stages_done ?? [];
     return (
-      <main className="page page--done">
-        <div className="result-wrap">
-          <ReactCompareSlider
-            itemOne={
-              <ReactCompareSliderImage
-                src={beforeUrl}
-                alt="Before"
-                style={{ backgroundColor: "#000" }}
-              />
-            }
-            itemTwo={
-              <ReactCompareSliderImage
-                src={resultUrl}
-                alt="After"
-                style={{ backgroundColor: "#000" }}
-              />
-            }
-            style={{ height: "100%", width: "100%" }}
-          />
-        </div>
-        {showStages && jobId && stagesDone.length > 0 && (
-          <div className="stage-strip-overlay">
-            <StageStrip jobId={jobId} stages={stagesDone} />
+      <>
+        <LcarsFrame section="Image Enhancement Complete" />
+        <main className="page page--done">
+          <div className="result-wrap">
+            <ReactCompareSlider
+              itemOne={
+                <ReactCompareSliderImage
+                  src={beforeUrl}
+                  alt="Original signal"
+                  style={{ backgroundColor: "#000" }}
+                />
+              }
+              itemTwo={
+                <ReactCompareSliderImage
+                  src={resultUrl}
+                  alt="Enhanced output"
+                  style={{ backgroundColor: "#000" }}
+                />
+              }
+              style={{ height: "100%", width: "100%" }}
+            />
           </div>
-        )}
-        <div className="toolbar">
-          <a className="btn btn-primary" href={resultUrl} download>
-            Download PNG
-          </a>
-          {stagesDone.length > 0 && (
-            <button
-              className="btn btn-ghost"
-              onClick={() => setShowStages((v) => !v)}
-            >
-              {showStages ? "Hide stages" : "Show stages"}
-            </button>
+          {showStages && jobId && stagesDone.length > 0 && (
+            <div className="stage-strip-overlay">
+              <StageStrip jobId={jobId} stages={stagesDone} />
+            </div>
           )}
-          <button className="btn btn-ghost" onClick={reset}>
-            Process another
-          </button>
-        </div>
-      </main>
+          <div className="toolbar">
+            <a className="btn btn-primary" href={resultUrl} download>
+              Beam Down
+            </a>
+            {stagesDone.length > 0 && (
+              <button
+                className="btn btn-ghost btn-tertiary"
+                onClick={() => setShowStages((v) => !v)}
+              >
+                {showStages ? "Hide Telemetry" : "Show Telemetry"}
+              </button>
+            )}
+            <button className="btn btn-ghost" onClick={reset}>
+              New Subspace Capture
+            </button>
+          </div>
+        </main>
+      </>
     );
   }
 
   return (
-    <main className="page page--center">
-      <div className="error-card">
-        <div className="error-title">Something went wrong</div>
-        <div className="error-msg">{errorMsg}</div>
-        <button className="btn btn-primary" onClick={reset}>
-          Try again
-        </button>
-      </div>
-    </main>
+    <>
+      <LcarsFrame section="Anomaly Detected" />
+      <main className="page page--center">
+        <div className="error-card">
+          <div className="error-title">Subsystem Fault</div>
+          <div className="error-msg">{errorMsg}</div>
+          <button className="btn btn-primary" onClick={reset}>
+            Re-engage
+          </button>
+        </div>
+      </main>
+    </>
   );
 }

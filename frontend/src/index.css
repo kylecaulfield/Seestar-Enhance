@@ -1,16 +1,38 @@
+/* LCARS-inspired theme — Star Trek: The Next Generation panel aesthetic.
+ *
+ * Palette: black field with the canonical LCARS accents (orange/gold,
+ * peach, blue, lavender, salmon). Pill ("stadium") shapes everywhere
+ * because that's what makes LCARS read as LCARS — radius is so large
+ * it always saturates to a half-circle on either end. Typography is
+ * uppercase wide-spaced sans (the closest free-stack approximation of
+ * Microgramma / Eurostile that ships every browser is "Helvetica Neue
+ * Condensed Bold" → fall back through "Arial Narrow" → system sans).
+ */
+
 :root {
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* The LCARS canonical palette as published in TNG production
+   * documents (Mike Okuda's specs). RGB values are eyeballed from
+   * frame grabs so they're not mathematically perfect, but they
+   * read correctly on a black field. */
+  --lcars-black: #000000;
+  --lcars-orange: #ff9900; /* primary accent — buttons, headers */
+  --lcars-peach: #ffcc99; /* secondary — borders, dividers */
+  --lcars-cream: #ffcc66; /* tertiary highlight */
+  --lcars-blue: #99ccff; /* status info */
+  --lcars-lavender: #cc99cc; /* category accent */
+  --lcars-salmon: #cc6666; /* warning / error */
+  --lcars-rust: #cc6633; /* dim accent */
+  --lcars-text: #ffaa00; /* default text on black */
+  --lcars-text-dim: #cc7700; /* subdued */
+
+  font-family:
+    "Helvetica Neue", "HelveticaNeue", "Arial Narrow", "Avenir Next Condensed",
+    system-ui, sans-serif;
+  font-stretch: condensed;
   color-scheme: dark;
-  background: #07080c;
-  color: #e6e8ee;
-  --bg: #07080c;
-  --bg-panel: #0f131a;
-  --border: #1d2330;
-  --border-strong: #2a3142;
-  --accent: #7aa6ff;
-  --accent-strong: #a7c1ff;
-  --muted: #8b93a7;
-  --error: #ff7a7a;
+  background: var(--lcars-black);
+  color: var(--lcars-text);
+  letter-spacing: 0.04em;
 }
 
 html,
@@ -22,23 +44,86 @@ body,
 }
 
 body {
+  background: var(--lcars-black);
+  /* Subtle vignette so the cabin lighting feels right rather than
+   * harsh-flat black. */
   background:
-    radial-gradient(1200px 800px at 30% -10%, #101524 0%, transparent 60%),
-    radial-gradient(900px 600px at 80% 110%, #0e1a2a 0%, transparent 60%),
-    var(--bg);
+    radial-gradient(1400px 900px at 50% 30%, #050505 0%, var(--lcars-black) 70%),
+    var(--lcars-black);
 }
 
 * {
   box-sizing: border-box;
 }
 
+/* ---------- LCARS top frame ----------
+ *
+ * The signature elbow: a horizontal coloured band at the top with a
+ * curved stub on the left that drops down into a vertical column. We
+ * don't render the column (would steal real estate from the actual
+ * UI), but the top band + label is what makes the page read as a
+ * starship console. */
+
+.lcars-frame {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px 16px 8px 8px;
+  background: var(--lcars-black);
+  z-index: 5;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* The "elbow" — a fat pill on the left fading into the band. */
+.lcars-elbow {
+  width: 110px;
+  background: var(--lcars-orange);
+  border-radius: 40px 40px 6px 40px;
+  flex-shrink: 0;
+}
+
+.lcars-bar {
+  flex: 1;
+  background: var(--lcars-peach);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  color: var(--lcars-black);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.lcars-bar-stardate {
+  color: var(--lcars-black);
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.lcars-cap {
+  width: 56px;
+  background: var(--lcars-blue);
+  border-radius: 6px 28px 28px 6px;
+  flex-shrink: 0;
+}
+
+/* Push page content below the fixed top frame. */
 .page {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 88px 24px 24px;
 }
 
 .page--center {
@@ -46,55 +131,63 @@ body {
 }
 
 .page--done {
-  padding: 0;
+  padding: 56px 0 0;
   justify-content: stretch;
 }
 
-/* Drop zone */
+/* ---------- Drop zone ----------
+ *
+ * Big LCARS pill that says AWAITING IMAGE FILE. */
 .drop-zone {
   width: min(720px, 92vw);
   aspect-ratio: 16 / 9;
-  border: 2px dashed var(--border-strong);
-  border-radius: 18px;
-  background: rgba(15, 19, 26, 0.6);
+  border: 3px solid var(--lcars-orange);
+  border-radius: 60px;
+  background: rgba(255, 153, 0, 0.04);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 14px;
   cursor: pointer;
-  transition: border-color 120ms ease, background-color 120ms ease,
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
     transform 120ms ease;
   user-select: none;
 }
 
 .drop-zone:hover,
 .drop-zone--active {
-  border-color: var(--accent);
-  background: rgba(20, 28, 48, 0.7);
+  border-color: var(--lcars-cream);
+  background: rgba(255, 204, 102, 0.08);
   transform: translateY(-1px);
 }
 
 .drop-zone:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 4px;
+  outline: 2px solid var(--lcars-blue);
+  outline-offset: 6px;
 }
 
 .drop-icon {
-  font-size: 42px;
-  color: var(--accent);
+  font-size: 56px;
+  color: var(--lcars-orange);
   line-height: 1;
 }
 
 .drop-title {
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--lcars-cream);
 }
 
 .drop-sub {
-  color: var(--muted);
-  font-size: 14px;
+  color: var(--lcars-peach);
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
 }
 
 .hidden-input {
@@ -102,69 +195,83 @@ body {
 }
 
 .brand {
-  margin-top: 24px;
-  color: var(--muted);
-  font-size: 13px;
-  letter-spacing: 0.14em;
+  margin-top: 28px;
+  color: var(--lcars-blue);
+  font-size: 12px;
+  letter-spacing: 0.36em;
   text-transform: uppercase;
 }
 
-/* Processing */
+/* ---------- Processing view ---------- */
 .processing {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 22px;
-  min-width: 280px;
+  min-width: 320px;
 }
 
+/* "Engaged" indicator — a pulsing pill, not a spinner. LCARS doesn't
+ * spin. */
 .spinner {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
-  animation: spin 900ms linear infinite;
+  width: 88px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--lcars-orange);
+  animation: pulse 900ms ease-in-out infinite;
+  box-shadow: 0 0 24px rgba(255, 153, 0, 0.55);
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scaleX(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
   }
 }
 
 .processing-title {
-  font-size: 18px;
-  color: #d9deea;
+  font-size: 20px;
+  color: var(--lcars-cream);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 .processing-bar {
-  width: min(420px, 80vw);
-  height: 6px;
+  width: min(480px, 86vw);
+  height: 14px;
   border-radius: 999px;
-  background: var(--border);
+  background: rgba(255, 153, 0, 0.12);
+  border: 1px solid var(--lcars-rust);
   overflow: hidden;
 }
 
 .processing-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  background: linear-gradient(90deg, var(--lcars-orange), var(--lcars-cream));
   transition: width 250ms ease;
 }
 
 .processing-meta {
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--lcars-blue);
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 .accent {
-  color: var(--accent-strong);
+  color: var(--lcars-lavender);
 }
 
-/* Result */
+/* ---------- Result view ---------- */
 .result-wrap {
   position: fixed;
-  inset: 0 0 72px 0;
+  inset: 56px 0 88px 0; /* leave room for top frame + bottom toolbar */
   background: #000;
 }
 
@@ -173,29 +280,33 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 72px;
+  height: 88px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  background: rgba(7, 8, 12, 0.92);
-  border-top: 1px solid var(--border);
-  backdrop-filter: blur(8px);
+  gap: 14px;
+  background: var(--lcars-black);
+  border-top: 3px solid var(--lcars-orange);
+  padding: 0 24px;
 }
 
-/* Buttons */
+/* ---------- Buttons ---------- */
 .btn {
   appearance: none;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  padding: 10px 18px;
-  font-size: 14px;
-  font-weight: 500;
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 28px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
   cursor: pointer;
   text-decoration: none;
-  color: inherit;
-  transition: background-color 120ms ease, border-color 120ms ease,
-    transform 60ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    transform 60ms ease,
+    box-shadow 120ms ease;
 }
 
 .btn:active {
@@ -203,57 +314,69 @@ body {
 }
 
 .btn-primary {
-  background: var(--accent);
-  color: #07080c;
+  background: var(--lcars-orange);
+  color: var(--lcars-black);
 }
 
 .btn-primary:hover {
-  background: var(--accent-strong);
+  background: var(--lcars-cream);
+  box-shadow: 0 0 18px rgba(255, 204, 102, 0.5);
 }
 
 .btn-ghost {
-  background: transparent;
-  border-color: var(--border-strong);
-  color: #d9deea;
+  background: var(--lcars-blue);
+  color: var(--lcars-black);
 }
 
 .btn-ghost:hover {
-  border-color: var(--accent);
+  background: #cce6ff;
 }
 
-/* Error */
+/* Subdued button for secondary actions (Show stages). */
+.btn-ghost.btn-tertiary {
+  background: var(--lcars-lavender);
+}
+
+.btn-ghost.btn-tertiary:hover {
+  background: #e6c2e6;
+}
+
+/* ---------- Error view ---------- */
 .error-card {
-  max-width: 420px;
-  padding: 24px;
-  border: 1px solid var(--border-strong);
-  border-radius: 14px;
-  background: rgba(15, 19, 26, 0.8);
+  max-width: 480px;
+  padding: 24px 28px;
+  border: 3px solid var(--lcars-salmon);
+  border-radius: 32px;
+  background: rgba(204, 102, 102, 0.08);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   align-items: flex-start;
 }
 
 .error-title {
   font-size: 16px;
-  color: var(--error);
+  color: var(--lcars-salmon);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 .error-msg {
-  font-size: 14px;
-  color: var(--muted);
+  font-size: 13px;
+  color: var(--lcars-peach);
   word-break: break-word;
+  letter-spacing: 0.04em;
 }
 
-/* Stage-by-stage preview strip — used both during processing (inline
- * under the progress bar) and as an opt-in overlay on the done view. */
+/* ---------- Stage-by-stage preview strip ---------- */
 .stage-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
   justify-content: center;
-  max-width: 920px;
-  padding: 12px 0;
+  max-width: 960px;
+  padding: 16px 8px 4px;
 }
 
 .stage-thumb {
@@ -269,27 +392,27 @@ body {
   width: 110px;
   height: 110px;
   object-fit: cover;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border: 2px solid var(--lcars-rust);
+  border-radius: 14px;
   background: #000;
 }
 
 .stage-thumb figcaption {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 10px;
+  color: var(--lcars-peach);
   text-align: center;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
 }
 
-/* Done view: stage strip is an overlay above the toolbar that pushes
- * the slider up. position:fixed so it sits above the absolute slider. */
+/* Done view: stage strip is an overlay above the toolbar. */
 .stage-strip-overlay {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 72px;
-  background: rgba(7, 8, 12, 0.92);
-  border-top: 1px solid var(--border);
+  bottom: 88px;
+  background: rgba(0, 0, 0, 0.95);
+  border-top: 2px solid var(--lcars-peach);
   padding: 8px 12px;
   overflow-x: auto;
   backdrop-filter: blur(8px);
