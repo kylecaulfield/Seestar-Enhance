@@ -392,6 +392,21 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
   every response. `_friendly_error` strips the per-job temp path
   out of exception messages so internal layout doesn't leak.
 - [ ] Persistent job store (SQLite) so the server can survive restarts.
+- [x] **Visible processing queue + ETA** — _Shipped._ `/status/{job_id}`
+  exposes `queue_position` (1-based), `queue_total`, `eta_seconds`
+  computed from a rolling 20-sample average of recent pipeline
+  durations. `/health` adds `inflight`, `running`, `queued`,
+  `worker_capacity`, `recent_avg_seconds`, and a coarse
+  `load: idle | busy | backed_up` field — no raw CPU% or per-job
+  metadata leaked. Frontend processing view shows "Position N of M ·
+  estimated wait ~X min" while queued, regular stage label while
+  running. Drop view shows a load badge before the user uploads when
+  the pipeline isn't idle.
+- [ ] **Prometheus-style `/internal/metrics` endpoint behind auth** —
+  if you want SRE-grade monitoring (per-stage timing histograms,
+  CPU%, RSS, GC), serve them under an auth-gated `/internal/metrics`
+  rather than mixing them into the public-facing `/health`. Use
+  `prometheus-client` and bolt to FastAPI via a sub-app or middleware.
 
 ## Frontend
 

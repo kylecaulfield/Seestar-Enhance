@@ -28,7 +28,11 @@ def test_health() -> None:
     with TestClient(app) as client:
         r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    body = r.json()
+    # The status field is the kubernetes/docker liveness contract.
+    # Other keys (load, inflight, etc.) are tested in
+    # test_health_includes_load_summary below.
+    assert body["status"] == "ok"
 
 
 def test_process_rejects_non_fits() -> None:
@@ -143,3 +147,93 @@ def test_error_message_strips_internal_temp_path() -> None:
     msg = _friendly_error(leak)
     assert str(_WORK_ROOT) not in msg
     assert "[job]" in msg or "Could not parse" in msg
+
+
+# ---------- /health load summary + queue tracking ----------
+
+
+def test_health_includes_load_summary() -> None:
+    """/health surfaces the coarse system-load fields so the SPA's drop
+    view can show "Pipeline busy" without exposing raw CPU%.
+    """
+    with TestClient(app) as client:
+        r = client.get("/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert "load" in body
+    assert body["load"] in ("idle", "busy", "backed_up")
+    assert "inflight" in body
+    assert body["worker_capacity"] >= 1
+    assert body["max_inflight"] >= body["worker_capacity"]
+    assert "recent_avg_seconds" in body
+
+
+def test_status_includes_queue_position(synthetic_fits_bytes: bytes) -> None:
+    """Once a job is uploaded, /status reports its 1-based position +
+    an ETA derived from the rolling-average pipeline duration.
+    """
+    with TestClient(app) as client:
+        r = client.post(
+            "/process",
+            files={"file": ("t.fits", synthetic_fits_bytes, "application/fits")},
+        )
+        assert r.status_code == 200
+        job_id = r.json()["job_id"]
+
+        # Poll once — queue_position should be a small positive int.
+        s = client.get(f"/status/{job_id}").json()
+        assert s["queue_position"] >= 1
+        assert s["queue_total"] >= 1
+        assert s["worker_capacity"] >= 1
+        # ETA can be None if the job is queued and the deque is empty
+        # before any successful run, but float when set.
+        if s["eta_seconds"] is not None:
+            assert s["eta_seconds"] >= 0
+
+        # Drain the job so the next test isn't racing the worker.
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            s = client.get(f"/status/{job_id}").json()
+            if s["status"] in ("done", "error"):
+                break
+            time.sleep(0.2)
+        assert s["status"] == "done", s
+
+
+def test_queue_helpers_position_ordering() -> None:
+    """Direct unit test of `_queue_position_and_eta` — no HTTP involved
+    so we can simulate concurrent uploads without racing the worker
+    pool. Positions follow created_at ordering.
+    """
+    import time as _time
+
+    from app.main import _JOBS, _JOBS_LOCK, Job, _queue_position_and_eta
+
+    # Snapshot + restore the registry so the test can hammer it
+    # without leaking state into other tests.
+    with _JOBS_LOCK:
+        snapshot = dict(_JOBS)
+        _JOBS.clear()
+    try:
+        a = Job(id="a", status="queued", created_at=_time.time())
+        b = Job(id="b", status="queued", created_at=a.created_at + 0.01)
+        c = Job(id="c", status="queued", created_at=a.created_at + 0.02)
+        with _JOBS_LOCK:
+            _JOBS["a"] = a
+            _JOBS["b"] = b
+            _JOBS["c"] = c
+        pa, _ = _queue_position_and_eta(a)
+        pb, _ = _queue_position_and_eta(b)
+        pc, _ = _queue_position_and_eta(c)
+        assert (pa, pb, pc) == (1, 2, 3), (pa, pb, pc)
+
+        # Done jobs report position 0.
+        a.status = "done"
+        pa_done, eta_done = _queue_position_and_eta(a)
+        assert pa_done == 0
+        assert eta_done is None
+    finally:
+        with _JOBS_LOCK:
+            _JOBS.clear()
+            _JOBS.update(snapshot)

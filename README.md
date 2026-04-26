@@ -502,9 +502,9 @@ function of your CPU, not your GPU.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET  | `/health`                          | Liveness probe, returns `{"status": "ok"}`. |
+| GET  | `/health`                          | Liveness probe + coarse load summary. Returns `{status: "ok", load: "idle"|"busy"|"backed_up", inflight, running, queued, worker_capacity, max_inflight, recent_avg_seconds}`. The SPA's drop view fetches this once on mount to surface "Pipeline busy" when uploads will queue. |
 | POST | `/process`                         | Multipart FITS upload. Starts a background pipeline job, returns `{"job_id": "…"}`. |
-| GET  | `/status/{job_id}`                 | `{status, stage, progress 0..1, classification, error, stages_done}`. `status` is `queued`, `running`, `done`, or `error`. `stages_done` is the ordered list of pipeline stages that have produced a thumbnail so far. |
+| GET  | `/status/{job_id}`                 | `{status, stage, progress 0..1, classification, error, stages_done, queue_position, queue_total, eta_seconds, worker_capacity}`. `status` is `queued`, `running`, `done`, or `error`. `queue_position` is 1-based (1..worker_capacity = currently running, beyond = waiting). `eta_seconds` comes from a rolling average of recent pipeline durations. |
 | GET  | `/result/{job_id}`                 | The processed 16-bit RGB PNG. 409 if the job hasn't finished. |
 | GET  | `/preview/{job_id}/before`         | A simple log-stretched 8-bit preview of the input, for the slider. |
 | GET  | `/preview/{job_id}/stage/{stage}`  | A 300×300 thumbnail PNG of the in-flight image after a named stage runs. The frontend's stage-strip renders these as the pipeline progresses. 404 for unknown stage names; 409 while the named stage is still in flight. |

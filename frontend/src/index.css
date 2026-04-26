@@ -202,6 +202,29 @@ body {
   text-transform: uppercase;
 }
 
+/* Drop-view system load badge. Shown only when /health reports a
+ * non-idle pipeline so the user knows what to expect before they
+ * upload. Three coarse states map to three LCARS accents. */
+.load-badge {
+  margin-top: 22px;
+  padding: 10px 22px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--lcars-black);
+}
+
+.load-busy {
+  background: var(--lcars-cream);
+}
+
+.load-backed_up {
+  background: var(--lcars-salmon);
+  color: var(--lcars-black);
+}
+
 /* ---------- Processing view ---------- */
 .processing {
   display: flex;

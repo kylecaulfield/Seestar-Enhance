@@ -14,7 +14,37 @@ type Status = {
   classification: string | null;
   error: string | null;
   stages_done: string[];
+  // Visible queue (added after the original /status). Optional in
+  // the type so older builds of the SPA don't crash if the backend
+  // hasn't been redeployed yet.
+  queue_position?: number;
+  queue_total?: number;
+  eta_seconds?: number | null;
+  worker_capacity?: number;
 };
+
+// Coarse load summary from /health. The drop view fetches this once
+// on mount so the UI can warn the user when the pipeline is busy
+// before they upload, instead of after.
+type Health = {
+  status: string;
+  load: "idle" | "busy" | "backed_up";
+  inflight: number;
+  running: number;
+  queued: number;
+  worker_capacity: number;
+  recent_avg_seconds: number;
+};
+
+function formatEta(seconds: number | null | undefined): string {
+  if (seconds == null || !isFinite(seconds) || seconds <= 0) return "";
+  if (seconds < 60) return `~${Math.ceil(seconds)} sec`;
+  const mins = Math.ceil(seconds / 60);
+  if (mins < 60) return `~${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `~${hrs} hr ${rem} min` : `~${hrs} hr`;
+}
 
 // LCARS-flavoured stage labels. Brief enough to fit the bar.
 const STAGE_LABELS: Record<string, string> = {
@@ -117,8 +147,29 @@ export default function App() {
   const [resultUrl, setResultUrl] = useState<string>("");
   const [beforeUrl, setBeforeUrl] = useState<string>("");
   const [showStages, setShowStages] = useState<boolean>(false);
+  const [health, setHealth] = useState<Health | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Refresh the load indicator when the user lands on (or returns to)
+  // the drop view. One fetch per visit is enough — the backend updates
+  // are bursty (a job per 30-60s), and we don't want a constant poll on
+  // an idle page.
+  useEffect(() => {
+    if (view !== "drop") return;
+    let cancelled = false;
+    fetch(`${API_BASE}/health`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: Health | null) => {
+        if (!cancelled && j && j.status === "ok") setHealth(j);
+      })
+      .catch(() => {
+        // Health failures are non-fatal — drop view still works without it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
 
   const reset = useCallback(() => {
     if (pollTimerRef.current) {
@@ -253,6 +304,23 @@ export default function App() {
               onChange={(e) => onPick(e.target.files?.[0])}
             />
           </div>
+          {health && health.load !== "idle" && (
+            <div className={`load-badge load-${health.load}`}>
+              {health.load === "busy"
+                ? `Pipeline busy · ${health.running} job${health.running === 1 ? "" : "s"} running`
+                : (() => {
+                    // Wait estimate when joining the back of the queue:
+                    // ceil(queued / workers) waves of avg time. Without
+                    // the divide-by-workers we'd overstate wait by the
+                    // worker count (e.g. 6 queued / 2 workers = 3 waves,
+                    // not 6).
+                    const workers = Math.max(1, health.worker_capacity);
+                    const waves = Math.ceil(health.queued / workers);
+                    const wait = waves * health.recent_avg_seconds;
+                    return `Pipeline backed up · ${health.inflight} jobs in flight · ${formatEta(wait)} wait`;
+                  })()}
+            </div>
+          )}
           <div className="brand">USS Seestar · Image Enhancement Subsystem</div>
         </main>
       </>
@@ -263,16 +331,42 @@ export default function App() {
     const pct = Math.round((status?.progress ?? 0) * 100);
     const jobId = status?.job_id ?? "";
     const stagesDone = status?.stages_done ?? [];
+    const queuePos = status?.queue_position ?? 0;
+    const queueTotal = status?.queue_total ?? 0;
+    const workerCap = status?.worker_capacity ?? 1;
+    const eta = formatEta(status?.eta_seconds);
+    // We're "actually queued" (not running) when our position is past
+    // the worker capacity. Position 1..workerCap means a worker is
+    // already crunching us — show the stage label, not the queue line.
+    const isQueuedBehind = queuePos > workerCap;
     return (
       <>
-        <LcarsFrame section="Pipeline Engaged" />
+        <LcarsFrame section={isQueuedBehind ? "Standing By" : "Pipeline Engaged"} />
         <main className="page page--center">
           <div className="processing">
             <div className="spinner" aria-hidden />
-            <div className="processing-title">{stageLabel(status?.stage ?? "queued")}</div>
-            <div className="processing-bar" aria-hidden>
-              <div className="processing-bar-fill" style={{ width: `${pct}%` }} />
-            </div>
+            {isQueuedBehind ? (
+              <>
+                <div className="processing-title">
+                  Position {queuePos} of {queueTotal}
+                </div>
+                {eta && (
+                  <div className="processing-meta">Estimated wait · {eta}</div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="processing-title">
+                  {stageLabel(status?.stage ?? "queued")}
+                </div>
+                <div className="processing-bar" aria-hidden>
+                  <div className="processing-bar-fill" style={{ width: `${pct}%` }} />
+                </div>
+                {eta && (
+                  <div className="processing-meta">Remaining · {eta}</div>
+                )}
+              </>
+            )}
             {status?.classification && (
               <div className="processing-meta">
                 Profile · <span className="accent">{status.classification}</span>

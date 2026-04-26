@@ -26,6 +26,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -91,6 +92,13 @@ class Job:
     stages_dir: Path = field(default_factory=Path)
     stages_done: list[str] = field(default_factory=list)
     classification: str | None = None
+    # Unix timestamps. `created_at` is when the upload landed and is
+    # used to order the visible processing queue. `started_at` flips
+    # when the worker thread picks the job up — together with
+    # terminated_at it gives us the duration sample we feed into
+    # `_RECENT_DURATIONS` for ETA estimation.
+    created_at: float = field(default_factory=time.time)
+    started_at: float | None = None
     # Unix timestamp when the job reached a terminal state (done/error).
     # None while queued/running. Used by the reaper to enforce the TTL.
     terminated_at: float | None = None
@@ -98,6 +106,13 @@ class Job:
 
 _JOBS: dict[str, Job] = {}
 _JOBS_LOCK = threading.Lock()
+
+# Rolling window of recent end-to-end pipeline durations (seconds). Used
+# to estimate the wait time for queued jobs in /status. 20 samples is
+# enough for the per-stage variance from BM3D/profile choice to average
+# out without a single 5-minute outlier dominating the rest of the day.
+_RECENT_DURATIONS: deque[float] = deque(maxlen=20)
+_DEFAULT_DURATION_SECONDS = 60.0  # fallback when the deque is empty.
 
 # Jobs in a terminal state (done/error) are reaped this many seconds after
 # they finish. An hour gives the user plenty of time to download the PNG;
@@ -127,6 +142,63 @@ _STAGE_PREVIEW_ORDER = (
     "curves",
     "recombine",
 )
+
+
+def _avg_duration_seconds() -> float:
+    """Mean of the recent-completed-duration window. Falls back to a
+    plausible per-image default when the worker hasn't completed any
+    jobs yet (cold start, or first run after a process restart).
+    """
+    with _JOBS_LOCK:
+        if not _RECENT_DURATIONS:
+            return _DEFAULT_DURATION_SECONDS
+        return sum(_RECENT_DURATIONS) / len(_RECENT_DURATIONS)
+
+
+def _queue_position_and_eta(job: Job) -> tuple[int, float | None]:
+    """Return ``(position, eta_seconds)`` for an in-flight job.
+
+    Position is 1-based. Position 1..MAX_WORKERS = currently running;
+    position MAX_WORKERS+1 onward = waiting in the executor queue.
+    Done/error jobs return ``(0, None)``.
+
+    ETA is computed from the rolling-average pipeline duration:
+
+      - position <= MAX_WORKERS: remaining_for_running = avg * (1 -
+        own_progress) — i.e. only the pipeline's own remainder.
+      - position > MAX_WORKERS: time for the (position - MAX_WORKERS)
+        jobs ahead of us to drain on a worker, plus our own avg.
+
+    Both cases use the same `avg`, so the user sees a stable estimate
+    that goes down as the queue drains.
+    """
+    if job.status in ("done", "error"):
+        return 0, None
+    avg = _avg_duration_seconds()
+    with _JOBS_LOCK:
+        # Sort by created_at and find this job's index. Ties broken by id
+        # (stable) so two simultaneous uploads each see a consistent
+        # position rather than flipping between polls.
+        active = sorted(
+            (j for j in _JOBS.values() if j.status in ("queued", "running")),
+            key=lambda j: (j.created_at, j.id),
+        )
+        position = next((i + 1 for i, j in enumerate(active) if j.id == job.id), 0)
+
+    if position == 0:
+        return 0, None
+
+    if position <= _MAX_WORKERS:
+        # Currently running — ETA is just our own remaining work.
+        remaining_self = max(0.0, avg * (1.0 - float(job.progress)))
+        return position, remaining_self
+
+    # Queued. Wait = (jobs ahead of us in the queue, divided across
+    # workers) * avg + our own pipeline time. Integer ceil because a
+    # half-finished worker can't take our job.
+    queued_ahead = position - _MAX_WORKERS
+    waves = (queued_ahead + _MAX_WORKERS - 1) // _MAX_WORKERS
+    return position, waves * avg + avg
 
 
 def _refresh_stages_done(job: Job) -> None:
@@ -175,6 +247,7 @@ def _run_job(job_id: str) -> None:
             job.status = "running"
             job.stage = "load"
             job.progress = 0.0
+            job.started_at = time.time()
 
         _save_before_preview(job.input_path, job.before_path)
 
@@ -216,11 +289,17 @@ def _run_job(job_id: str) -> None:
         # after the last progress callback fires.
         _refresh_stages_done(job)
 
+        end = time.time()
         with _JOBS_LOCK:
             job.status = "done"
             job.stage = "done"
             job.progress = 1.0
-            job.terminated_at = time.time()
+            job.terminated_at = end
+            # Record the duration sample for ETA estimation. Only successful
+            # runs feed the average — error jobs typically fail fast (bad
+            # FITS) and would skew the average down.
+            if job.started_at is not None:
+                _RECENT_DURATIONS.append(max(0.0, end - job.started_at))
     except Exception as exc:
         logger.exception("job %s failed", job_id)
         # Surface a user-friendly message; the full traceback is in the
@@ -378,8 +457,43 @@ app.add_middleware(_SecurityHeadersMiddleware)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, object]:
+    """Liveness probe + a coarse system-load summary.
+
+    The liveness fields (`status: ok`) are what kubernetes / Docker
+    healthchecks care about. The extra fields are for the SPA's drop
+    view to surface "Pipeline busy" without exposing raw CPU% or other
+    system metrics. ``load`` is a three-state coarse signal:
+
+      - ``idle``: no jobs in flight
+      - ``busy``: workers are full but no queue
+      - ``backed_up``: queued jobs waiting
+
+    None of these reveal which jobs exist or who owns them — just the
+    counts. Per-IP rate limiting and auth are still required if you
+    expose this on a public port; the load signal is for UX, not
+    security.
+    """
+    with _JOBS_LOCK:
+        active = [j for j in _JOBS.values() if j.status in ("queued", "running")]
+        running = sum(1 for j in active if j.status == "running")
+        queued = sum(1 for j in active if j.status == "queued")
+    if running == 0 and queued == 0:
+        load = "idle"
+    elif queued == 0:
+        load = "busy"
+    else:
+        load = "backed_up"
+    return {
+        "status": "ok",
+        "inflight": running + queued,
+        "running": running,
+        "queued": queued,
+        "worker_capacity": _MAX_WORKERS,
+        "max_inflight": _MAX_INFLIGHT_JOBS,
+        "recent_avg_seconds": round(_avg_duration_seconds(), 1),
+        "load": load,
+    }
 
 
 @app.post("/process")
@@ -478,6 +592,7 @@ def status_endpoint(job_id: str) -> dict[str, object]:
     # Cheap O(stages) glob; only triggered while the job is running.
     if job.status == "running":
         _refresh_stages_done(job)
+    position, eta_seconds = _queue_position_and_eta(job)
     with _JOBS_LOCK:
         return {
             "job_id": job.id,
@@ -487,6 +602,10 @@ def status_endpoint(job_id: str) -> dict[str, object]:
             "classification": job.classification,
             "error": job.error,
             "stages_done": list(job.stages_done),
+            "queue_position": position,
+            "queue_total": sum(1 for j in _JOBS.values() if j.status in ("queued", "running")),
+            "eta_seconds": (None if eta_seconds is None else round(float(eta_seconds), 1)),
+            "worker_capacity": _MAX_WORKERS,
         }
 
 
