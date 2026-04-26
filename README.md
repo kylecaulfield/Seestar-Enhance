@@ -476,6 +476,34 @@ set, so keep `N × 350 MB` under free memory.
 Per-file failures are logged and don't abort the batch; exit code is
 `0` if all succeeded, `1` if any failed.
 
+### Output formats
+
+Single-file mode infers the format from the explicit output path's
+suffix:
+
+```sh
+python -m app.pipeline input.fit  output.png    # 16-bit PNG (default)
+python -m app.pipeline input.fit  output.tif    # 16-bit TIFF for PixInsight/Siril
+python -m app.pipeline input.fit  output.fits   # float32 FITS, preserves pipeline precision
+```
+
+Batch mode picks the format via `--format` (defaults to `png`):
+
+```sh
+python -m app.pipeline --batch samples/*.fit --format tiff
+python -m app.pipeline --batch samples/*.fit --format fits --output-dir samples/outputs
+```
+
+| Format | Bit depth | Best for |
+| --- | --- | --- |
+| `png`  | 16-bit per channel | Screen viewing, sharing, the web UI default. Universally supported. |
+| `tiff` | 16-bit per channel | Further editing in PixInsight, Siril, GIMP, Photoshop. Lossless, zlib-compressed. |
+| `fits` | float32 per channel | Re-stretching at full pipeline precision. RGB stored as a `(3, H, W)` cube per FITS NAXIS convention. |
+
+The web UI exposes the same choice via a dropdown next to the drop
+zone — your selection is sent as `?format=...` on the upload, and
+`/result/{job_id}` serves the right `Content-Type` + filename.
+
 ### Performance notes
 
 **Where time goes:** BM3D denoise is ~75 % of per-image wall time.
@@ -503,7 +531,7 @@ function of your CPU, not your GPU.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET  | `/health`                          | Liveness probe + coarse load summary. Returns `{status: "ok", load: "idle"|"busy"|"backed_up", inflight, running, queued, worker_capacity, max_inflight, recent_avg_seconds}`. The SPA's drop view fetches this once on mount to surface "Pipeline busy" when uploads will queue. |
-| POST | `/process`                         | Multipart FITS upload. Starts a background pipeline job, returns `{"job_id": "…"}`. |
+| POST | `/process?format=png|tiff|fits`    | Multipart FITS upload. Starts a background pipeline job, returns `{"job_id": "…"}`. `format` is optional (defaults to `png`); chooses the output container — 16-bit PNG (default, screen-friendly), 16-bit TIFF (lossless, opens cleanly in PixInsight/Siril/GIMP), or float32 FITS (preserves full pipeline precision; RGB stored as a `(3, H, W)` cube per FITS NAXIS convention). Unknown values 400. |
 | GET  | `/status/{job_id}`                 | `{status, stage, progress 0..1, classification, error, stages_done, queue_position, queue_total, eta_seconds, worker_capacity}`. `status` is `queued`, `running`, `done`, or `error`. `queue_position` is 1-based (1..worker_capacity = currently running, beyond = waiting). `eta_seconds` comes from a rolling average of recent pipeline durations. |
 | GET  | `/result/{job_id}`                 | The processed 16-bit RGB PNG. 409 if the job hasn't finished. |
 | GET  | `/preview/{job_id}/before`         | A simple log-stretched 8-bit preview of the input, for the slider. |

@@ -139,6 +139,14 @@ function StageStrip({ jobId, stages }: StageStripProps) {
   );
 }
 
+type OutputFormat = "png" | "tiff" | "fits";
+
+const OUTPUT_FORMAT_LABELS: Record<OutputFormat, string> = {
+  png: "PNG · 16-bit",
+  tiff: "TIFF · 16-bit",
+  fits: "FITS · float32",
+};
+
 export default function App() {
   const [view, setView] = useState<View>("drop");
   const [status, setStatus] = useState<Status | null>(null);
@@ -148,6 +156,11 @@ export default function App() {
   const [beforeUrl, setBeforeUrl] = useState<string>("");
   const [showStages, setShowStages] = useState<boolean>(false);
   const [health, setHealth] = useState<Health | null>(null);
+  // The output format the user picks on the drop view, then carried
+  // through processing → done so the Beam Down link references the
+  // matching extension. PNG is the default — universal compatibility,
+  // smallest size, fine for screen viewing.
+  const [outputFormat, setOutputFormat] = useState<OutputFormat>("png");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -190,7 +203,7 @@ export default function App() {
     };
   }, []);
 
-  const uploadFile = useCallback(async (file: File) => {
+  const uploadFile = useCallback(async (file: File, format: OutputFormat) => {
     setView("processing");
     setStatus({
       job_id: "",
@@ -205,10 +218,10 @@ export default function App() {
     try {
       const form = new FormData();
       form.append("file", file);
-      const resp = await fetch(`${API_BASE}/process`, {
-        method: "POST",
-        body: form,
-      });
+      const resp = await fetch(
+        `${API_BASE}/process?format=${encodeURIComponent(format)}`,
+        { method: "POST", body: form },
+      );
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(text || `upload failed: ${resp.status}`);
@@ -257,9 +270,9 @@ export default function App() {
         setView("error");
         return;
       }
-      void uploadFile(file);
+      void uploadFile(file, outputFormat);
     },
-    [uploadFile],
+    [uploadFile, outputFormat],
   );
 
   const onDrop = useCallback(
@@ -303,6 +316,24 @@ export default function App() {
               className="hidden-input"
               onChange={(e) => onPick(e.target.files?.[0])}
             />
+          </div>
+
+          <div className="format-row" onClick={(e) => e.stopPropagation()}>
+            <label className="format-label" htmlFor="format-select">
+              Output Format
+            </label>
+            <select
+              id="format-select"
+              className="format-select"
+              value={outputFormat}
+              onChange={(e) => setOutputFormat(e.target.value as OutputFormat)}
+            >
+              {(Object.keys(OUTPUT_FORMAT_LABELS) as OutputFormat[]).map((f) => (
+                <option key={f} value={f}>
+                  {OUTPUT_FORMAT_LABELS[f]}
+                </option>
+              ))}
+            </select>
           </div>
           {health && health.load !== "idle" && (
             <div className={`load-badge load-${health.load}`}>

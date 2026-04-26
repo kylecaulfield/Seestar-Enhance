@@ -11,6 +11,10 @@ astropy==6.1.4
 numpy==1.26.4
 scipy==1.13.1
 scikit-image==0.24.0
+# tifffile is a transitive dep of scikit-image but the export stage
+# imports it directly for 16-bit RGB TIFF output, so pin it explicitly
+# rather than leaning on the transitive resolution.
+tifffile==2024.8.30
 Pillow==10.4.0
 pypng==0.20220715.0
 colour-demosaicing==0.2.5

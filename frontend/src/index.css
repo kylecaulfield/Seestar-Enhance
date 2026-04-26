@@ -202,6 +202,62 @@ body {
   text-transform: uppercase;
 }
 
+/* Output-format chooser on the drop view. Sits below the drop zone so
+ * it doesn't fight for tap area with the file picker. The
+ * stopPropagation in the JSX prevents a click on the row from
+ * triggering the drop zone's hidden file input. */
+.format-row {
+  margin-top: 22px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.format-label {
+  color: var(--lcars-peach);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.format-select {
+  appearance: none;
+  background: var(--lcars-blue);
+  color: var(--lcars-black);
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 36px 10px 22px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-family: inherit;
+  cursor: pointer;
+  background-image: linear-gradient(
+      45deg,
+      transparent 50%,
+      var(--lcars-black) 50%
+    ),
+    linear-gradient(135deg, var(--lcars-black) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+}
+
+.format-select:hover {
+  background-color: #cce6ff;
+}
+
+.format-select:focus {
+  outline: 2px solid var(--lcars-cream);
+  outline-offset: 4px;
+}
+
 /* Drop-view system load badge. Shown only when /health reports a
  * non-idle pipeline so the user knows what to expect before they
  * upload. Three coarse states map to three LCARS accents. */

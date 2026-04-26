@@ -123,3 +123,50 @@ def test_export_writes_16bit_png(sample_rgb: np.ndarray, tmp_path: Path) -> None
 def test_export_rejects_non_rgb(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         export.process(np.zeros((4, 4), dtype=np.float32), tmp_path / "x.png")
+
+
+def test_export_writes_16bit_tiff(sample_rgb: np.ndarray, tmp_path: Path) -> None:
+    """TIFF roundtrips at 16-bit precision and reads back to (H, W, 3)
+    uint16 in the natural numpy axis order."""
+    import tifffile
+
+    out_path = tmp_path / "out.tif"
+    export.process(sample_rgb, out_path)
+    assert out_path.is_file()
+
+    arr = tifffile.imread(out_path)
+    assert arr.shape == sample_rgb.shape, arr.shape
+    assert arr.dtype == np.uint16
+    # Values should round-trip within 1 LSB (rounding into uint16).
+    expected = np.round(np.clip(sample_rgb, 0, 1) * 65535).astype(np.uint16)
+    assert np.allclose(arr, expected, atol=1)
+
+
+def test_export_writes_float32_fits(sample_rgb: np.ndarray, tmp_path: Path) -> None:
+    """FITS roundtrips at full float32 precision; (H, W, 3) flips to
+    (3, H, W) in the cube per the NAXIS convention. astropy reads the
+    bytes back as big-endian float32 (>f4), which is functionally the
+    same dtype — assert via itemsize/kind rather than exact dtype eq.
+    """
+    from astropy.io import fits
+
+    out_path = tmp_path / "out.fits"
+    export.process(sample_rgb, out_path)
+    assert out_path.is_file()
+
+    data = fits.getdata(out_path)
+    h, w, _ = sample_rgb.shape
+    assert data.shape == (3, h, w), data.shape
+    assert data.dtype.kind == "f" and data.dtype.itemsize == 4
+    assert 0.0 <= float(data.min())
+    assert float(data.max()) <= 1.0
+    # No quantisation — float roundtrip is exact within the byte-swap.
+    expected = np.moveaxis(np.clip(sample_rgb, 0, 1).astype(np.float32), -1, 0)
+    assert np.allclose(np.asarray(data, dtype=np.float32), expected, atol=1e-6)
+
+
+def test_export_rejects_unknown_suffix(sample_rgb: np.ndarray, tmp_path: Path) -> None:
+    """A `.jpg` (or any other unknown suffix) raises rather than
+    silently writing the wrong format."""
+    with pytest.raises(ValueError, match="unsupported output suffix"):
+        export.process(sample_rgb, tmp_path / "out.jpg")

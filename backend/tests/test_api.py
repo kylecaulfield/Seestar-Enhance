@@ -201,6 +201,61 @@ def test_status_includes_queue_position(synthetic_fits_bytes: bytes) -> None:
         assert s["status"] == "done", s
 
 
+# ---------- output format selection ----------
+
+
+@pytest.mark.parametrize(
+    "fmt,expected_suffix,expected_media",
+    [
+        ("png", ".png", "image/png"),
+        ("tiff", ".tif", "image/tiff"),
+        ("fits", ".fits", "application/fits"),
+    ],
+)
+def test_process_supports_format_param(
+    synthetic_fits_bytes: bytes,
+    fmt: str,
+    expected_suffix: str,
+    expected_media: str,
+) -> None:
+    """`/process?format=...` writes the right file type; `/result/{id}`
+    serves it with the matching media type and Content-Disposition.
+    """
+    with TestClient(app) as client:
+        r = client.post(
+            f"/process?format={fmt}",
+            files={"file": ("t.fits", synthetic_fits_bytes, "application/fits")},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            s = client.get(f"/status/{job_id}").json()
+            if s["status"] in ("done", "error"):
+                break
+            time.sleep(0.2)
+        assert s["status"] == "done", s
+
+        result = client.get(f"/result/{job_id}")
+        assert result.status_code == 200
+        assert result.headers["content-type"].startswith(expected_media)
+        # Content-Disposition's filename should carry the right suffix
+        # so a plain `download=` link in the SPA picks the right name.
+        cd = result.headers.get("content-disposition", "")
+        assert expected_suffix in cd, cd
+
+
+def test_process_rejects_unknown_format(synthetic_fits_bytes: bytes) -> None:
+    with TestClient(app) as client:
+        r = client.post(
+            "/process?format=jpg",
+            files={"file": ("t.fits", synthetic_fits_bytes, "application/fits")},
+        )
+    assert r.status_code == 400
+    assert "unknown format" in r.text or "format" in r.text.lower()
+
+
 def test_queue_helpers_position_ordering() -> None:
     """Direct unit test of `_queue_position_and_eta` — no HTTP involved
     so we can simulate concurrent uploads without racing the worker

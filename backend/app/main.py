@@ -496,8 +496,24 @@ def health() -> dict[str, object]:
     }
 
 
+# Output formats the API will dispatch on. Values are the canonical
+# file extension; the actual write happens via `stages.export.process`
+# which is suffix-driven. Kept here as an allow-list so a crafted
+# `?format=` value can't traverse the filesystem (only suffixes from
+# this set ever get written).
+_OUTPUT_FORMATS: dict[str, tuple[str, str]] = {
+    # name        ext       media-type
+    "png": ("png", "image/png"),
+    "tiff": ("tif", "image/tiff"),
+    "fits": ("fits", "application/fits"),
+}
+
+
 @app.post("/process")
-async def process_endpoint(file: UploadFile) -> dict[str, str]:
+async def process_endpoint(
+    file: UploadFile,
+    format: str = "png",
+) -> dict[str, str]:
     if not file.filename:
         raise HTTPException(status_code=400, detail="missing filename")
 
@@ -506,6 +522,13 @@ async def process_endpoint(file: UploadFile) -> dict[str, str]:
         name_lower.endswith(".fit") or name_lower.endswith(".fits") or name_lower.endswith(".fts")
     ):
         raise HTTPException(status_code=400, detail="expected a .fit/.fits/.fts file")
+
+    fmt = format.lower().strip()
+    if fmt not in _OUTPUT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown format {format!r}; expected one of {sorted(_OUTPUT_FORMATS)}",
+        )
 
     # Queue cap: reject uploads when there's already enough in-flight work
     # to keep every pipeline worker busy for a while. Stops a single client
@@ -524,8 +547,9 @@ async def process_endpoint(file: UploadFile) -> dict[str, str]:
     job_dir = _WORK_ROOT / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
+    output_ext, _ = _OUTPUT_FORMATS[fmt]
     input_path = job_dir / "input.fits"
-    output_path = job_dir / "output.png"
+    output_path = job_dir / f"output.{output_ext}"
     before_path = job_dir / "before.png"
     stages_dir = job_dir / "stages"
 
@@ -609,6 +633,16 @@ def status_endpoint(job_id: str) -> dict[str, object]:
         }
 
 
+_SUFFIX_MEDIA_TYPE = {
+    ".png": "image/png",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".fits": "application/fits",
+    ".fit": "application/fits",
+    ".fts": "application/fits",
+}
+
+
 @app.get("/result/{job_id}")
 def result_endpoint(job_id: str) -> FileResponse:
     with _JOBS_LOCK:
@@ -619,10 +653,12 @@ def result_endpoint(job_id: str) -> FileResponse:
         raise HTTPException(status_code=409, detail=f"job not ready: {job.status}")
     if not job.output_path.is_file():
         raise HTTPException(status_code=500, detail="output missing")
+    suffix = job.output_path.suffix.lower()
+    media = _SUFFIX_MEDIA_TYPE.get(suffix, "application/octet-stream")
     return FileResponse(
         job.output_path,
-        media_type="image/png",
-        filename=f"seestar-enhance-{job_id[:8]}.png",
+        media_type=media,
+        filename=f"seestar-enhance-{job_id[:8]}{suffix}",
     )
 
 

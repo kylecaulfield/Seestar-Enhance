@@ -585,6 +585,19 @@ def main(argv: list[str] | None = None) -> int:
             "under free memory. Ignored in single-file mode."
         ),
     )
+    parser.add_argument(
+        "--format",
+        choices=("png", "tiff", "fits"),
+        default="png",
+        help=(
+            "Output format for batch mode (default: png). 16-bit PNG "
+            "for the screen-friendly default, 16-bit TIFF for further "
+            "processing in PixInsight/Siril/GIMP, float32 FITS to "
+            "preserve full pipeline precision. Single-file mode infers "
+            "the format from the explicit output path's suffix and "
+            "ignores this flag."
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -606,8 +619,14 @@ def main(argv: list[str] | None = None) -> int:
         inputs = list(args.input)
         if args.output is not None:
             inputs.append(args.output)
+        # Map the user-friendly --format name to the canonical file
+        # extension. The export stage is suffix-driven, so the only
+        # job here is to pick the right one.
+        _BATCH_FORMAT_EXT = {"png": "png", "tiff": "tif", "fits": "fits"}
+        out_ext = _BATCH_FORMAT_EXT[args.format]
         work = [
-            (str(Path(p)), str((out_dir or Path(p).parent) / f"{Path(p).stem}.png")) for p in inputs
+            (str(Path(p)), str((out_dir or Path(p).parent) / f"{Path(p).stem}.{out_ext}"))
+            for p in inputs
         ]
         n_jobs = _resolve_batch_jobs(args.jobs, n_work=len(work))
         if n_jobs == 1:

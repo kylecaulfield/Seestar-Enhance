@@ -520,7 +520,18 @@ hardest-case samples (NGC 6888 / NGC 2244 / NGC 6960).
 - [ ] Support for other smart-telescope FITS variants (Vespera, Dwarf,
   eVscope) — mostly a matter of reading their header conventions.
 - [ ] Offer a grayscale pipeline path that skips demosaic and color.
-- [ ] Export to TIFF and FITS in addition to PNG.
+- [x] **Export to TIFF and FITS in addition to PNG** — _Shipped._
+  `stages/export.process()` is now suffix-driven: `.png` writes
+  16-bit RGB via `pypng` (default), `.tif`/`.tiff` writes 16-bit
+  RGB via `tifffile` with zlib compression (lossless, no
+  imagecodecs dep), `.fits`/`.fit`/`.fts` writes a float32
+  `(3, H, W)` cube via `astropy.io.fits` (full pipeline precision,
+  no quantisation). CLI `--format png|tiff|fits` controls batch
+  output extension; single-file mode infers from the explicit
+  output path. `/process?format=...` carries the choice through
+  the API; `/result/{id}` serves with the right `Content-Type`
+  and filename. SPA gets a Format dropdown next to the drop zone.
+  7 new tests, including byte-order-aware FITS roundtrip.
 - [x] **Batch mode on the CLI** — _Shipped._ `python -m app.pipeline
   --batch samples/*.fit` writes a matching `.png` next to each input,
   or under `--output-dir` when supplied. `--jobs N` runs N pipelines
