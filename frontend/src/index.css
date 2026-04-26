@@ -202,6 +202,34 @@ body {
   text-transform: uppercase;
 }
 
+/* GitHub link below the brand line on the drop view. Uses the lavender
+ * LCARS accent so it doesn't fight the orange/peach drop zone or the
+ * blue brand text. Pill geometry consistent with the rest of the UI. */
+.brand-github {
+  margin-top: 10px;
+  display: inline-block;
+  padding: 6px 16px;
+  border-radius: 999px;
+  background: var(--lcars-lavender);
+  color: var(--lcars-black);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    transform 60ms ease;
+}
+
+.brand-github:hover {
+  background: #e6c2e6;
+}
+
+.brand-github:active {
+  transform: translateY(1px);
+}
+
 /* Output-format chooser on the drop view. Sits below the drop zone so
  * it doesn't fight for tap area with the file picker. The
  * stopPropagation in the JSX prevents a click on the row from

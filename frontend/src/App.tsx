@@ -139,6 +139,8 @@ function StageStrip({ jobId, stages }: StageStripProps) {
   );
 }
 
+const GITHUB_URL = "https://github.com/kylecaulfield/Seestar-Enhance";
+
 type OutputFormat = "png" | "tiff" | "fits";
 
 const OUTPUT_FORMAT_LABELS: Record<OutputFormat, string> = {
@@ -352,7 +354,17 @@ export default function App() {
                   })()}
             </div>
           )}
-          <div className="brand">USS Seestar · Image Enhancement Subsystem</div>
+          <div className="brand">
+            USS Seestar · Image Enhancement Subsystem
+          </div>
+          <a
+            className="brand-github"
+            href={GITHUB_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Source ↗ GitHub
+          </a>
         </main>
       </>
     );
